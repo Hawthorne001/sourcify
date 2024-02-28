@@ -1,4 +1,6 @@
 process.env.NODE_CONFIG_ENV = "test";
+process.env.SOURCIFY_POSTGRES_HOST = "";
+process.env.ALLIANCE_POSTGRES_HOST = "";
 
 const chai = require("chai");
 const chaiHttp = require("chai-http");
@@ -9,6 +11,7 @@ const util = require("util");
 const rimraf = require("rimraf");
 const addContext = require("mochawesome/addContext");
 const { assertVerification } = require("../helpers/assertions");
+const testEtherscanContracts = require("../helpers/etherscanInstanceContracts.json");
 
 const TEST_TIME = process.env.TEST_TIME || 30000; // 30 seconds
 const CUSTOM_PORT = 5556;
@@ -32,11 +35,21 @@ describe("Test Supported Chains", function () {
   let currentResponse = null; // to log server response when test fails
 
   const testedChains = new Set(); // Track tested chains and make sure all "supported = true" chains are tested
-
+  let supportedChains;
   before(async function () {
     const promisified = util.promisify(server.app.listen);
     await promisified(server.port);
     console.log(`Injector listening on port ${server.port}!`);
+
+    chai
+      .request(server.app)
+      .get("/chains")
+      .end((err, res) => {
+        if (err !== null) {
+          throw new Error("Cannot fetch supportedChains");
+        }
+        supportedChains = res.body.filter((chain) => chain.supported);
+      });
   });
 
   beforeEach(() => {
@@ -683,6 +696,14 @@ describe("Test Supported Chains", function () {
     "shared/"
   );
 
+  // ZetaChain: Athens Mainnet
+  verifyContract(
+    "0x5f5a064761A416919A60939DB85AeFD487e6cB3A",
+    "7000",
+    "ZetaChain Athens Mainnet",
+    "shared/"
+  );
+
   // Oasis Emerald Mainnet
   verifyContract(
     "0x7228Ab1F57e6fFd9F85930b9a9C2E9DD2307E4D0",
@@ -1198,13 +1219,117 @@ describe("Test Supported Chains", function () {
     "1127469/"
   );
 
-    // Polygon zkEVM Mainnet
-    verifyContract(
-      "0xaa50c265da4552db6e8983317e3b5510727db132",
-      "1101",
-      "Polygon zkEVM",
-      "shared/"
+  // Polygon zkEVM Mainnet
+  verifyContract(
+    "0xaa50c265da4552db6e8983317e3b5510727db132",
+    "1101",
+    "Polygon zkEVM",
+    "shared/"
+  );
+
+  // Scroll Sepolia Testnet
+  verifyContract(
+    "0xce478ef16eb34438463513c48da4f31269fa8b6a",
+    "534351",
+    "Scroll Sepolia Testnet",
+    "shared/"
+  );
+
+  // Scroll
+  verifyContract(
+    "0x1685d11a2EDce8d2C8015f4cB0Cd197839b761f5",
+    "534352",
+    "Scroll",
+    "shared/"
+  );
+
+  // Mode Testnet
+  verifyContract(
+    "0x4d5f06cC2A7d3a625C95D04Cfaec5AEb5eCfA33D",
+    "919",
+    "Mode Testnet",
+    "shared/"
+  );
+
+  // Mode
+  verifyContract(
+    "0x4d5f06cC2A7d3a625C95D04Cfaec5AEb5eCfA33D",
+    "34443",
+    "Mode",
+    "shared/"
+  );
+
+  // Conflux eSpace
+  verifyContract(
+    "0x4d5f06cc2a7d3a625c95d04cfaec5aeb5ecfa33d",
+    "1030",
+    "Conflux eSpace",
+    "shared/"
+  );
+
+  // Lightlink Pegasus Testnet
+  verifyContract(
+    "0x948a02ABB83ED54D8908F6725d2a9cEE6B6B582a",
+    "1891",
+    "Lightlink Pegasus Testnet",
+    "shared/"
+  );
+
+  // Lightlink Phoenix Mainnet
+  verifyContract(
+    "0x948a02ABB83ED54D8908F6725d2a9cEE6B6B582a",
+    "1890",
+    "Lightlink Phoenix Mainnet",
+    "shared/"
+  );
+
+  // ZKFair Mainnet
+  verifyContract(
+    "0xc3a9766e07754cC1894E5c0A2459d23A676dDD0D",
+    "42766",
+    "ZKFair Mainnet",
+    "shared/"
+  );
+
+  // Kroma Sepolia
+  verifyContract(
+    "0x4d5f06cC2A7d3a625C95D04Cfaec5AEb5eCfA33D",
+    "2358",
+    "Kroma Sepolia",
+    "shared/"
+  );
+
+  // Kroma
+  verifyContract(
+    "0x270236c25d28a2cd85ed9a1ef0b31835fb9e4ff6",
+    "255",
+    "Kroma",
+    "shared/"
+  );
+
+  it("should have included Etherscan contracts for all testedChains having etherscanAPI", function (done) {
+    const missingEtherscanTests = [];
+    supportedChains
+      .filter((chain) => testedChains.has(`${chain.chainId}`))
+      .forEach((chain) => {
+        if (chain.chainId == 1337 || chain.chainId == 31337) return; // Skip LOCAL_CHAINS: Ganache and Hardhat
+        if (
+          chain.etherscanAPI &&
+          testEtherscanContracts[chain.chainId] === undefined
+        ) {
+          missingEtherscanTests.push(chain);
+        }
+      });
+
+    chai.assert(
+      missingEtherscanTests.length == 0,
+      `There are missing Etherscan tests for chains: ${missingEtherscanTests
+        .map((chain) => `${chain.name} (${chain.chainId})`)
+        .join(",\n")}`
     );
+
+    done();
+  });
 
   // Finally check if all the "supported: true" chains have been tested
   it("should have tested all supported chains", function (done) {
@@ -1212,29 +1337,22 @@ describe("Test Supported Chains", function () {
       // Don't test all chains if it is a pull request for adding new chain support
       return this.skip();
     }
-    chai
-      .request(server.app)
-      .get("/chains")
-      .end((err, res) => {
-        chai.assert.equal(err, null);
-        chai.assert.equal(res.status, 200);
-        const supportedChains = res.body.filter((chain) => chain.supported);
-        const untestedChains = [];
-        supportedChains.forEach((chain) => {
-          if (chain.chainId == 1337 || chain.chainId == 31337) return; // Skip LOCAL_CHAINS: Ganache and Hardhat
-          if (!testedChains.has(chain.chainId.toString())) {
-            untestedChains.push(chain);
-          }
-        });
-        chai.assert(
-          untestedChains.length == 0,
-          `There are untested chains!: ${untestedChains
-            .map((chain) => `${chain.name} (${chain.chainId})`)
-            .join(",\n")}`
-        );
 
-        done();
-      });
+    const untestedChains = [];
+    supportedChains.forEach((chain) => {
+      if (chain.chainId == 1337 || chain.chainId == 31337) return; // Skip LOCAL_CHAINS: Ganache and Hardhat
+      if (!testedChains.has(chain.chainId.toString())) {
+        untestedChains.push(chain);
+      }
+    });
+    chai.assert(
+      untestedChains.length == 0,
+      `There are untested chains!: ${untestedChains
+        .map((chain) => `${chain.name} (${chain.chainId})`)
+        .join(",\n")}`
+    );
+
+    done();
   });
 
   //////////////////////

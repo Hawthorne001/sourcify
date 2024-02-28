@@ -56,7 +56,7 @@
     "rpc": [
       {
         "type": "FetchRequest",
-        "url": "https://rpc.goerli.ethpandaops.io",
+        "url": "https://rpc.goerli.eu1.ethpandaops.io",
         "headers": [
           {
             "headerName": "CF-Access-Client-Id",
@@ -828,6 +828,15 @@
       }
     }
   },
+  "7000": {
+    "sourcifyName": "ZetaChain: Mainnet",
+    "supported": true,
+    "fetchContractCreationTxUsing": {
+      "blockscoutScrape": {
+        "url": "https://zetachain.blockscout.com/"
+      }
+    }
+  },
   "42262": {
     "sourcifyName": "Oasis Emerald Mainnet",
     "supported": true,
@@ -1347,6 +1356,118 @@
     },
     "fetchContractCreationTxUsing": {
       "etherscanApi": true
+    }
+  },
+  "534352": {
+    "sourcifyName": "Scroll",
+    "supported": true,
+    "etherscanApi": {
+      "apiURL": "https://api.scrollscan.com",
+      "apiKeyEnvName": "SCROLLSCAN_API_KEY"
+    },
+    "fetchContractCreationTxUsing": {
+      "etherscanApi": true,
+      "blockscoutScrape": {
+        "url": "https://blockscout.scroll.io/"
+      }
+    }
+  },
+  "534351": {
+    "sourcifyName": "Scroll Sepolia Testnet",
+    "supported": true,
+    "etherscanApi": {
+      "apiURL": "https://api-sepolia.scrollscan.com",
+      "apiKeyEnvName": "SCROLLSCAN_API_KEY"
+    },
+    "fetchContractCreationTxUsing": {
+      "etherscanApi": true,
+      "blockscoutScrape": {
+        "url": "https://sepolia-blockscout.scroll.io"
+      }
+    }
+  },
+  "34443": {
+    "sourcifyName": "Mode",
+    "supported": true,
+    "fetchContractCreationTxUsing": {
+      "blockscoutScrape": {
+        "url": "https://explorer.mode.network/"
+      }
+    }
+  },
+  "919": {
+    "sourcifyName": "Mode Testnet",
+    "supported": true,
+    "fetchContractCreationTxUsing": {
+      "blockscoutApi": {
+        "url": "https://sepolia.explorer.mode.network/"
+      }
+    }
+  },
+  "1030": {
+    "sourcifyName": "Conflux eSpace",
+    "supported": true,
+    "etherscanApi": {
+      "apiURL": "https://evmapi.confluxscan.net"
+    },
+    "fetchContractCreationTxUsing": {
+      "etherscanApi": true
+    }
+  },
+  "42766": {
+    "sourcifyName": "ZKFair Mainnet",
+    "supported": true,
+    "fetchContractCreationTxUsing": {
+      "etherscanApi": true,
+      "blockscoutApi": {
+        "url": "https://scan.zkfair.io/"
+      }
+    }
+  },
+  "1890": {
+    "sourcifyName": "Lightlink Phoenix Mainnet",
+    "supported": true,
+    "fetchContractCreationTxUsing": {
+      "blockscoutApi": {
+        "url": "https://phoenix.lightlink.io/"
+      }
+    }
+  },
+  "1891": {
+    "sourcifyName": "Lightlink Pegasus Testnet",
+    "supported": true,
+    "fetchContractCreationTxUsing": {
+      "blockscoutApi": {
+        "url": "https://pegasus.lightlink.io/"
+      }
+    }
+  },
+  "255": {
+    "sourcifyName": "Kroma",
+    "supported": true,
+    "etherscanApi": {
+      "apiURL": "https://api.kromascan.com",
+      "apiKeyEnvName": "KROMASCAN_API_KEY"
+    },
+    "fetchContractCreationTxUsing": {
+      "etherscanApi": true,
+      "blockscoutApi": {
+        "url": "https://blockscout.kroma.network/"
+      }
+    }
+  },
+  "2358": {
+    "sourcifyName": "Kroma Sepolia",
+    "supported": true,
+    "etherscanApi": {
+      "apiURL": "https://api-sepolia.kromascan.com",
+      "apiKeyEnvName": "KROMASCAN_API_KEY"
+    },
+    "fetchContractCreationTxUsing": {
+      "etherscanApi": true,
+      "blockscoutApi": {
+        "url": "https://blockscout.sepolia.kroma.network/"
+      }
     }
   }
 }

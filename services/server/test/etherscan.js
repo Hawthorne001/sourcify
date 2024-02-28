@@ -1,4 +1,7 @@
 process.env.NODE_CONFIG_ENV = "test";
+process.env.SOURCIFY_POSTGRES_HOST = "";
+process.env.ALLIANCE_POSTGRES_HOST = "";
+
 const Server = require("../dist/server/server").Server;
 const chai = require("chai");
 const chaiHttp = require("chai-http");
@@ -181,6 +184,25 @@ describe("Import From Etherscan and Verify", function () {
           });
       });
 
+      it("should support a custom api key", (done) => {
+        const contract = testContracts[tempChainId][0];
+        chai
+          .request(server.app)
+          .post("/verify/etherscan")
+          .field("address", contract.address)
+          .field("chainId", tempChainId)
+          .field("apiKey", "TEST")
+          .end((err, res) => {
+            // currentResponse = res;
+            chai
+              .expect(res.body.error)
+              .to.equal(
+                "Error in Etherscan API response. Result message: Invalid API Key"
+              );
+            done();
+          });
+      });
+
       // Skipping this test for now as they are failing on CI
       it.skip("should fail by exceeding rate limit on etherscan APIs", async () => {
         const chain = "1";
@@ -308,6 +330,24 @@ describe("Import From Etherscan and Verify", function () {
             res,
             "This contract is not verified on Etherscan"
           );
+          done();
+        });
+    });
+
+    it("should support a custom api key", (done) => {
+      chai
+        .request(server.app)
+        .post("/session/verify/etherscan")
+        .field("address", unusedAddress)
+        .field("chainId", "1")
+        .field("apiKey", "TEST")
+        .end((err, res) => {
+          // currentResponse = res;
+          chai
+            .expect(res.body.error)
+            .to.equal(
+              "Error in Etherscan API response. Result message: Invalid API Key"
+            );
           done();
         });
     });
