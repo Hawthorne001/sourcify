@@ -1,22 +1,22 @@
 version: 2.1
 
 orbs:
-  codecov: codecov/codecov@4.1.0
+  codecov: codecov/codecov@4.2.0
   
 workflows:
   # Always run
   node-build:
     jobs:
-      - node-v16
+      - node-v22
   # Has to run always. Can't regex filter on add-chain-{chainId} branch names see: https://stackoverflow.com/questions/55839004/circleci-regex-filtering-match-within-string
   test-new-chain:
     jobs:
       - test-new-chain
 
 jobs:
-  node-v16:
+  node-v22:
     docker:
-      - image: cimg/node:16.15
+      - image: cimg/node:22.5.1
       - image: postgres:16-alpine
         environment:
           POSTGRES_DB: sourcify
@@ -37,11 +37,14 @@ jobs:
           name: install dependencies
           command: npm install
       - run:
+          name: build
+          command: npx lerna run build
+      - run:
           name: lint
           command: npm run lerna-lint
       - run:
-          name: tsc and test
-          command: npx lerna run build && npx lerna run lerna-test
+          name: test
+          command: npx lerna run lerna-test
           environment:
             DOCKER_HOST_POSTGRES_TEST_PORT: 5432
             SOURCIFY_POSTGRES_HOST: "localhost"
@@ -56,7 +59,7 @@ jobs:
     resource_class: large
   test-new-chain:
     docker:
-      - image: cimg/node:16.15
+      - image: cimg/node:22.5.1
       - image: postgres:16-alpine
         environment:
           POSTGRES_DB: sourcify
@@ -72,10 +75,7 @@ jobs:
       - run:
           name: Check NEW_CHAIN_ID existence
           command: |
-            echo "Before sourcing BASH_ENV, NEW_CHAIN_ID=$NEW_CHAIN_ID"
-            cat $BASH_ENV
-            source $BASH_ENV
-            echo "After sourcing BASH_ENV, NEW_CHAIN_ID=$NEW_CHAIN_ID"
+            echo "NEW_CHAIN_ID=$NEW_CHAIN_ID"
             if [ -z "${NEW_CHAIN_ID}" ]; then
               echo 'NEW_CHAIN_ID is unset or empty, skipping subsequent steps.'
               circleci-agent step halt

@@ -5,7 +5,6 @@ import { id as keccak256str } from "ethers";
 import { KnownDecentralizedStorageFetchers } from "./types";
 import assert from "assert";
 import dotenv from "dotenv";
-import nodeFetch from "node-fetch";
 import { Logger } from "winston";
 
 dotenv.config();
@@ -26,7 +25,7 @@ export default class PendingContract {
     metadataHash: FileHash,
     address: string,
     chainId: number,
-    decentralizedStorageFetchers: KnownDecentralizedStorageFetchers
+    decentralizedStorageFetchers: KnownDecentralizedStorageFetchers,
   ) {
     this.metadataHash = metadataHash;
     this.address = address;
@@ -42,17 +41,17 @@ export default class PendingContract {
       this.decentralizedStorageFetchers[this.metadataHash.origin];
     if (!metadataFetcher) {
       throw new Error(
-        `No metadata fetcher found origin=${this.metadataHash.origin}`
+        `No metadata fetcher found origin=${this.metadataHash.origin}`,
       );
     }
     const metadataStr = await metadataFetcher
       .fetch(this.metadataHash)
       .catch((err) => {
         throw new Error(
-          `Can't fetch metadata address=${this.address} hash=${this.metadataHash.hash} origin=${this.metadataHash.origin}: ${err}`
+          `Can't fetch metadata address=${this.address} hash=${this.metadataHash.hash} origin=${this.metadataHash.origin}: ${err}`,
         );
       });
-    this.contractLogger.info("[PendingContract.assemble] Fetched metadata", {
+    this.contractLogger.info("Fetched metadata", {
       metadataHash: this.metadataHash,
       address: this.address,
       chainId: this.chainId,
@@ -75,7 +74,7 @@ export default class PendingContract {
               sourceUnitName,
               address: this.address,
               chainId: this.chainId,
-            }
+            },
           );
           this.movePendingToFetchedSources(sourceUnitName);
           return;
@@ -93,7 +92,7 @@ export default class PendingContract {
                 url,
                 address: this.address,
                 chainId: this.chainId,
-              }
+              },
             );
             continue;
           }
@@ -105,31 +104,28 @@ export default class PendingContract {
                 fileHash,
                 address: this.address,
                 chainId: this.chainId,
-              }
+              },
             );
             continue;
           }
           fetchedContent = await fetcher.fetch(fileHash);
-          this.contractLogger.info(
-            "[PendingContract.assemble] Fetched source",
-            {
-              sourceUnitName,
-              address: this.address,
-              chainId: this.chainId,
-              fileHash,
-            }
-          );
+          this.contractLogger.info("Fetched source", {
+            sourceUnitName,
+            address: this.address,
+            chainId: this.chainId,
+            fileHash,
+          });
           source.content = fetchedContent;
           this.movePendingToFetchedSources(sourceUnitName);
         }
-      }
+      },
     );
     return Promise.all(fetchPromises);
   };
 
   public sendToSourcifyServer = async (
     sourcifyServerURL: string,
-    creatorTxHash?: string
+    creatorTxHash?: string,
   ): Promise<any> => {
     // format in { "source1.sol": "Contract A { ...}", "source2.sol": "Contract B { ...}" } format
     const formattedSources: { [key: string]: string } = {};
@@ -137,48 +133,51 @@ export default class PendingContract {
       const source = this.fetchedSources[sourceUnitName];
       if (!source.content)
         throw new Error(
-          `Unexpectedly empty source content when sending to Sourcify server. Contract ${this.address} on chain ${this.chainId}`
+          `Unexpectedly empty source content when sending to Sourcify server. Contract ${this.address} on chain ${this.chainId}`,
         );
       formattedSources[sourceUnitName] = source.content;
     }
 
-    // Send to Sourcify server.
-    const response = await nodeFetch(sourcifyServerURL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "sourcify-monitor",
-      },
-      body: JSON.stringify({
-        chainId: this.chainId.toString(),
-        address: this.address,
-        files: {
-          ...formattedSources,
-          "metadata.json": JSON.stringify(this.metadata),
+    let response: Response;
+    try {
+      // Send to Sourcify server.
+      response = await fetch(sourcifyServerURL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "sourcify-monitor",
         },
-        creatorTxHash,
-      }),
-    });
-
-    if (response.status === 200) {
-      this.contractLogger.info(
-        "[PendingContract.sendToSourcifyServer] Contract sent",
-        {
+        body: JSON.stringify({
+          chainId: this.chainId.toString(),
           address: this.address,
-          chainId: this.chainId,
-          sourcifyServerURL,
-        }
-      );
-      return response.json();
-    } else {
+          files: {
+            ...formattedSources,
+            "metadata.json": JSON.stringify(this.metadata),
+          },
+          creatorTxHash,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Error sending contract ${this.address} to Sourcify server ${sourcifyServerURL} - response status not ok: ${response.statusText} ${await response.text()}`,
+        );
+      }
+    } catch (error: any) {
       throw new Error(
-        `Error sending contract ${
-          this.address
-        } to Sourcify server ${sourcifyServerURL}: ${
-          response.statusText
-        } ${await response.text()}`
+        `Error sending contract ${this.address} to Sourcify server ${sourcifyServerURL} - network error: ${error.message}`,
       );
     }
+
+    this.contractLogger.info(
+      "[PendingContract.sendToSourcifyServer] Contract sent",
+      {
+        address: this.address,
+        chainId: this.chainId,
+        sourcifyServerURL,
+      },
+    );
+    return await response.json();
   };
 
   private movePendingToFetchedSources = (sourceUnitName: string) => {
@@ -192,7 +191,7 @@ export default class PendingContract {
     const calculatedKeccak = keccak256str(source.content);
     assert(
       calculatedKeccak === source.keccak256,
-      `Keccak mismatch for ${sourceUnitName}`
+      `Keccak mismatch for ${sourceUnitName}`,
     );
 
     this.fetchedSources[sourceUnitName] = { ...source };

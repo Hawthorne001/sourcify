@@ -1,27 +1,40 @@
+const {
+  RWStorageIdentifiers,
+  WStorageIdentifiers,
+} = require("../server/services/storageServices/identifiers");
+
 module.exports = {
+  serverUrl: "https://staging.sourcify.dev/server",
   server: {
     port: 80,
   },
+  storage: {
+    read: RWStorageIdentifiers.SourcifyDatabase,
+    writeOrWarn: [
+      WStorageIdentifiers.AllianceDatabase,
+      WStorageIdentifiers.S3Repository,
+      RWStorageIdentifiers.RepositoryV1,
+    ],
+    writeOrErr: [
+      WStorageIdentifiers.RepositoryV2,
+      RWStorageIdentifiers.SourcifyDatabase,
+    ],
+  },
   repositoryV1: {
-    path: "/home/app/repositoryV1",
-    serverUrl: "https://repo.staging.sourcify.dev",
+    path: "/home/app/data/repository",
   },
   repositoryV2: {
-    path: "/home/app/repositoryV2",
+    path: "/home/app/data/repositoryV2",
   },
-  solcRepo: "/home/app/compilers/solc",
-  solJsonRepo: "/home/app/compilers/soljson",
+  solcRepo: "/home/app/data/compilers/solc",
+  solJsonRepo: "/home/app/data/compilers/soljson",
+  vyperRepo: "/home/app/data/compilers/vyper",
   session: {
     secure: true, // Set Secure in the Set-Cookie header i.e. require https
     storeType: "database",
   },
-  lambdaCompiler: {
-    enabled: true,
-    functionName: "compile:3",
-    // credentials as env vars
-  },
   rateLimit: {
-    enabled: true,
+    enabled: false,
     windowMs: 1 * 1000, // 1 sec
     max: 2,
   },

@@ -11,6 +11,8 @@ import { LocalChainFixture } from "../helpers/LocalChainFixture";
 import { ServerFixture } from "../helpers/ServerFixture";
 import { assertVerification } from "../helpers/assertions";
 import { id as keccak256str } from "ethers";
+import { RWStorageIdentifiers } from "../../src/server/services/storageServices/identifiers";
+import { RepositoryV1Service } from "../../src/server/services/storageServices/RepositoryV1Service";
 
 chai.use(chaiHttp);
 
@@ -19,28 +21,30 @@ describe("E2E test path sanitization", function () {
   const serverFixture = new ServerFixture();
 
   it("should sanitize the path of a source file with new line character \\n", async () => {
-    const artifact = await import(
-      "../testcontracts/path-sanitization-new-line/artifact.json"
-    );
+    const artifact = (
+      await import("../testcontracts/path-sanitization-new-line/artifact.json")
+    ).default;
     const { contractAddress } = await deployFromAbiAndBytecodeForCreatorTxHash(
       chainFixture.localSigner,
       artifact.abi,
-      artifact.bytecode
+      artifact.bytecode,
     );
 
-    const metadata = await import(
-      path.join(
-        __dirname,
-        "../testcontracts/path-sanitization-new-line/metadata.json"
+    const metadata = (
+      await import(
+        path.join(
+          __dirname,
+          "../testcontracts/path-sanitization-new-line/metadata.json",
+        )
       )
-    );
+    ).default;
     const sourcePath = path.join(
       __dirname,
       "..",
       "testcontracts",
       "path-sanitization-new-line",
       "sources",
-      "DFrostGeckoToken\n.sol" // with new line
+      "DFrostGeckoToken\n.sol", // with new line
     );
     const sourceBuffer = fs.readFileSync(sourcePath);
 
@@ -56,34 +60,35 @@ describe("E2E test path sanitization", function () {
         },
       });
     await assertVerification(
-      serverFixture.storageService,
+      serverFixture,
       null,
       res,
       null,
       contractAddress,
-      chainFixture.chainId
+      chainFixture.chainId,
     );
+
     const isExist = fs.existsSync(
       path.join(
-        serverFixture.server.repository,
+        serverFixture.repositoryV1Path,
         "contracts",
         "full_match",
         chainFixture.chainId,
         contractAddress,
         "sources/contracts",
-        "DFrostGeckoToken.sol" // without new line
-      )
+        "DFrostGeckoToken.sol", // without new line
+      ),
     );
     chai.expect(isExist, "Path not sanitized").to.be.true;
   });
 
   it("should verify a contract with paths containing misc. chars, save the path translation, and be able access the file over the API", async () => {
-    const sanitizeArtifact = await import(
-      "../testcontracts/path-sanitization/ERC20.json"
-    );
-    const sanitizeMetadata = await import(
-      "../testcontracts/path-sanitization/metadata.json"
-    );
+    const sanitizeArtifact = (
+      await import("../testcontracts/path-sanitization/ERC20.json")
+    ).default;
+    const sanitizeMetadata = (
+      await import("../testcontracts/path-sanitization/metadata.json")
+    ).default;
     // read all files under test/testcontracts/path-sanitization/sources/ and put them in an object
     const sanitizeSourcesObj: Record<string, Buffer> = {};
     fs.readdirSync(
@@ -92,8 +97,8 @@ describe("E2E test path sanitization", function () {
         "..",
         "testcontracts",
         "path-sanitization",
-        "sources"
-      )
+        "sources",
+      ),
     ).forEach(
       (fileName) =>
         (sanitizeSourcesObj[fileName] = fs.readFileSync(
@@ -103,20 +108,20 @@ describe("E2E test path sanitization", function () {
             "testcontracts",
             "path-sanitization",
             "sources",
-            fileName
-          )
-        ))
+            fileName,
+          ),
+        )),
     );
 
     const sanitizeMetadataBuffer = Buffer.from(
-      JSON.stringify(sanitizeMetadata)
+      JSON.stringify(sanitizeMetadata),
     );
 
     const toBeSanitizedContractAddress = await deployFromAbiAndBytecode(
       chainFixture.localSigner,
       sanitizeArtifact.abi,
       sanitizeArtifact.bytecode,
-      ["TestToken", "TEST", 1000000000]
+      ["TestToken", "TEST", 1000000000],
     );
 
     const verificationResponse = await chai
@@ -133,26 +138,27 @@ describe("E2E test path sanitization", function () {
 
     chai.expect(verificationResponse.status).to.equal(StatusCodes.OK);
     chai.expect(verificationResponse.body.result[0].status).to.equal("perfect");
+
     const contractSavedPath = path.join(
-      serverFixture.server.repository,
+      serverFixture.repositoryV1Path,
       "contracts",
       "full_match",
       chainFixture.chainId,
-      toBeSanitizedContractAddress
+      toBeSanitizedContractAddress,
     );
     const pathTranslationPath = path.join(
       contractSavedPath,
-      "path-translation.json"
+      "path-translation.json",
     );
 
     let pathTranslationJSON: any;
     try {
       pathTranslationJSON = JSON.parse(
-        fs.readFileSync(pathTranslationPath).toString()
+        fs.readFileSync(pathTranslationPath).toString(),
       );
     } catch (e) {
       throw new Error(
-        `Path translation file not found at ${pathTranslationPath}`
+        `Path translation file not found at ${pathTranslationPath}`,
       );
     }
 
@@ -169,7 +175,7 @@ describe("E2E test path sanitization", function () {
       chai
         .expect(
           sanitizeMetadata.sources,
-          `Original path ${originalPath} not found in metadata`
+          `Original path ${originalPath} not found in metadata`,
         )
         .to.include.keys(originalPath);
 
@@ -179,11 +185,11 @@ describe("E2E test path sanitization", function () {
         chainFixture.chainId,
         toBeSanitizedContractAddress,
         "sources",
-        pathTranslationJSON[originalPath]
+        pathTranslationJSON[originalPath],
       );
       // The path from the server response must be translated
       const translatedContractObject = fetchedContractFiles.find(
-        (obj: any) => obj.path === relativeFilePath
+        (obj: any) => obj.path === relativeFilePath,
       );
       chai.expect(translatedContractObject).to.exist;
       // And the saved file must be the same as in the metadata
@@ -194,7 +200,7 @@ describe("E2E test path sanitization", function () {
       chai
         .expect(
           sanitizeMetadataSources[originalPath].keccak256,
-          `Keccak of ${originalPath} does not match ${translatedContractObject.path}`
+          `Keccak of ${originalPath} does not match ${translatedContractObject.path}`,
         )
         .to.equal(keccak256str(translatedContractObject.content));
     });
@@ -204,7 +210,7 @@ describe("E2E test path sanitization", function () {
     deployFromAbiAndBytecode(
       chainFixture.localSigner,
       chainFixture.defaultContractArtifact.abi,
-      chainFixture.defaultContractArtifact.bytecode
+      chainFixture.defaultContractArtifact.bytecode,
     ).then((contractAddress) => {
       chai
         .request(serverFixture.server.app)
@@ -219,24 +225,25 @@ describe("E2E test path sanitization", function () {
         })
         .end(async (err, res) => {
           await assertVerification(
-            serverFixture.storageService,
+            serverFixture,
             err,
             res,
             null,
             chainFixture.defaultContractAddress,
             chainFixture.chainId,
-            "perfect"
+            "perfect",
           );
+
           const contractSavedPath = path.join(
-            serverFixture.server.repository,
+            serverFixture.repositoryV1Path,
             "contracts",
             "full_match",
             chainFixture.chainId,
-            contractAddress
+            contractAddress,
           );
           const pathTranslationPath = path.join(
             contractSavedPath,
-            "path-translation.json"
+            "path-translation.json",
           );
           chai.expect(fs.existsSync(pathTranslationPath)).to.be.false;
           done();

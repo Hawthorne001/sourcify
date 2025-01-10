@@ -30,27 +30,56 @@ export default class DecentralizedStorageFetcher extends EventEmitter {
 
   constructor(
     origin: DecentralizedStorageOrigin,
-    decentralizedStorageConfig: DecentralizedStorageConfig
+    decentralizedStorageConfig: DecentralizedStorageConfig,
   ) {
     super();
     this.origin = origin;
     this.storageFetcherLogger = logger.child({
       moduleName: "DecentralizedStorageFetcher " + origin,
     });
+    // decentralizedStorageConfig.gateways can be either string or GatewayFetcherConfig
     this.gatewayFetchers = decentralizedStorageConfig.gateways.map(
-      (gatewayURL) =>
-        new GatewayFetcher({
-          url: gatewayURL,
-          fetchTimeout:
-            decentralizedStorageConfig.timeout ||
-            defaultConfig.decentralizedStorages.ipfs.timeout,
-          fetchInterval:
-            decentralizedStorageConfig.interval ||
-            defaultConfig.decentralizedStorages.ipfs.interval,
-          fetchRetries:
-            decentralizedStorageConfig.retries ||
-            defaultConfig.decentralizedStorages.ipfs.retries,
-        })
+      (gateway) => {
+        if (typeof gateway === "string") {
+          // If gateway is a string use decentralizedStorageConfig options
+          //  if not available then use defaultConfig
+          return new GatewayFetcher({
+            url: gateway,
+            timeout:
+              decentralizedStorageConfig.timeout ||
+              defaultConfig.decentralizedStorages.ipfs.timeout,
+            interval:
+              decentralizedStorageConfig.interval ||
+              defaultConfig.decentralizedStorages.ipfs.interval,
+            retries:
+              decentralizedStorageConfig.retries ||
+              defaultConfig.decentralizedStorages.ipfs.retries,
+            headers: decentralizedStorageConfig.headers,
+          });
+        } else if (gateway.url) {
+          // If gateway is object use gateway's options
+          //  if not avaible then use decentralizedStorageConfig
+          //  if not available then use defaultConfig
+          return new GatewayFetcher({
+            url: gateway.url,
+            timeout:
+              gateway.timeout ||
+              decentralizedStorageConfig.timeout ||
+              defaultConfig.decentralizedStorages.ipfs.timeout,
+            interval:
+              gateway.interval ||
+              decentralizedStorageConfig.interval ||
+              defaultConfig.decentralizedStorages.ipfs.interval,
+            retries:
+              gateway.retries ||
+              decentralizedStorageConfig.retries ||
+              defaultConfig.decentralizedStorages.ipfs.retries,
+            headers: gateway.headers || decentralizedStorageConfig.headers,
+          });
+        } else {
+          throw new Error("You need to specify gateway url");
+        }
+      },
     );
   }
 
@@ -66,7 +95,7 @@ export default class DecentralizedStorageFetcher extends EventEmitter {
         }
         this.removeListener(`${fileHash.hash} fetched`, successListener);
         this.removeListener(`${fileHash.hash} fetch failed`, failListener);
-        this.storageFetcherLogger.info("Removed file listener", {
+        this.storageFetcherLogger.debug("Removed file listener", {
           fileHash,
           origin: this.origin,
           subscriberCounter: this.subcriberCounter,
@@ -122,7 +151,7 @@ export default class DecentralizedStorageFetcher extends EventEmitter {
     });
     for (let gwIndex = 0; gwIndex < this.gatewayFetchers.length; gwIndex++) {
       const gatewayFetcher = this.gatewayFetchers[gwIndex];
-      this.storageFetcherLogger.info("Fetching from gateway", {
+      this.storageFetcherLogger.debug("Fetching from gateway", {
         fileHash,
         origin: this.origin,
         subscriberCounter: this.subcriberCounter,
@@ -146,19 +175,19 @@ export default class DecentralizedStorageFetcher extends EventEmitter {
         // Notify the subscribers
         this.emit(`${fileHash.hash} fetched`, file);
         return;
-      } catch (err: any) {
-        if (err.timeout) {
+      } catch (error: any) {
+        if (error.timeout) {
           this.storageFetcherLogger.info("Timeout fetching from gateway", {
             fileHash,
             gatewayFetcherUrl: gatewayFetcher.url,
-            err,
+            error,
           });
         } else {
           // Something's wront with the GW. Use fallback
           this.storageFetcherLogger.error("Error fetching from gateway", {
             fileHash,
             gatewayFetcherUrl: gatewayFetcher.url,
-            err,
+            error,
           });
         }
       }

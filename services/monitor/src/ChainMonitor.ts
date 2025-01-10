@@ -2,10 +2,17 @@ import { FileHash } from "./util";
 import { Block, TransactionResponse, getCreateAddress } from "ethers";
 import assert from "assert";
 import { EventEmitter } from "stream";
-import { decode as bytecodeDecode } from "@ethereum-sourcify/bytecode-utils";
+import {
+  AuxdataStyle,
+  decode as bytecodeDecode,
+} from "@ethereum-sourcify/bytecode-utils";
 import { SourcifyChain } from "@ethereum-sourcify/lib-sourcify";
 import logger from "./logger";
-import { KnownDecentralizedStorageFetchers, MonitorConfig } from "./types";
+import {
+  KnownDecentralizedStorageFetchers,
+  MonitorConfig,
+  SourcifyRequestOptions,
+} from "./types";
 import PendingContract from "./PendingContract";
 import { Logger } from "winston";
 
@@ -22,6 +29,7 @@ export default class ChainMonitor extends EventEmitter {
   public sourcifyChain: SourcifyChain;
   private sourceFetchers: KnownDecentralizedStorageFetchers;
   private sourcifyServerURLs: string[];
+  private sourcifyRequestOptions: SourcifyRequestOptions;
 
   private chainLogger: Logger;
   private startBlock?: number;
@@ -32,20 +40,23 @@ export default class ChainMonitor extends EventEmitter {
   private bytecodeInterval: number;
   private bytecodeNumberOfTries: number;
   private running = false;
+  private blockPauseLogInterval: NodeJS.Timeout | null = null;
 
   constructor(
     sourcifyChain: SourcifyChain,
     sourceFetchers: KnownDecentralizedStorageFetchers,
-    monitorConfig: MonitorConfig
+    monitorConfig: MonitorConfig,
   ) {
     super();
     this.sourcifyChain = sourcifyChain;
     this.sourceFetchers = sourceFetchers; // TODO: handle multipe
     this.chainLogger = logger.child({
       moduleName: "ChainMonitor #" + this.sourcifyChain.chainId,
+      chainId: this.sourcifyChain.chainId,
     });
 
     this.sourcifyServerURLs = monitorConfig.sourcifyServerURLs;
+    this.sourcifyRequestOptions = monitorConfig.sourcifyRequestOptions;
 
     const chainConfig = {
       ...monitorConfig.defaultChainConfig,
@@ -63,8 +74,8 @@ export default class ChainMonitor extends EventEmitter {
     this.chainLogger.info(
       "Created ChainMonitor",
       Object.fromEntries(
-        Object.entries(this).filter(([, v]) => typeof v !== "function") // print everything except functions
-      )
+        Object.entries(this).filter(([, v]) => typeof v !== "function"), // print everything except functions
+      ),
     );
   }
 
@@ -78,7 +89,7 @@ export default class ChainMonitor extends EventEmitter {
       this.running = true;
       if (this.startBlock === undefined) {
         this.chainLogger.info(
-          "No start block provided. Starting from last block"
+          "No start block provided. Starting from last block",
         );
         this.startBlock = await this.sourcifyChain.getBlockNumber();
       }
@@ -90,8 +101,11 @@ export default class ChainMonitor extends EventEmitter {
 
       // Listen to new blocks
       this.on(NEW_BLOCK_EVENT, this.processBlockListener);
-    } catch (err: any) {
-      this.chainLogger.error("Error starting ChainMonitor", { err });
+
+      // Start logging block pause periodically
+      this.startBlockPauseLogging();
+    } catch (error: any) {
+      this.chainLogger.error("Error starting ChainMonitor", { error });
     }
   };
 
@@ -102,6 +116,9 @@ export default class ChainMonitor extends EventEmitter {
     this.chainLogger.info("Stopping ChainMonitor", { ...this });
     this.running = false;
     this.off(NEW_BLOCK_EVENT, this.processBlockListener);
+
+    // Stop logging block pause
+    this.stopBlockPauseLogging();
   };
 
   // Tries to get the next block by polling in variable intervals.
@@ -121,7 +138,7 @@ export default class ChainMonitor extends EventEmitter {
         });
         const block = await this.sourcifyChain.getBlock(
           currentBlockNumber,
-          true
+          true,
         );
 
         if (block) {
@@ -150,9 +167,6 @@ export default class ChainMonitor extends EventEmitter {
 
   // ListenerFunction
   private processBlockListener = async (block: Block) => {
-    this.chainLogger.info("Found and processing block", {
-      blockNumber: block.number,
-    });
     this.chainLogger.silly("Block", block);
 
     for (const tx of block.prefetchedTransactions) {
@@ -182,13 +196,13 @@ export default class ChainMonitor extends EventEmitter {
     this.blockInterval *= factor;
     this.blockInterval = Math.min(
       this.blockInterval,
-      this.blockIntervalUpperLimit
+      this.blockIntervalUpperLimit,
     );
     this.blockInterval = Math.max(
       this.blockInterval,
-      this.blockIntervalLowerLimit
+      this.blockIntervalLowerLimit,
     );
-    this.chainLogger.info(`${operation.toUpperCase()} block pause.`, {
+    this.chainLogger.debug(`${operation.toUpperCase()} block pause.`, {
       blockInterval: this.blockInterval,
     });
   };
@@ -202,8 +216,8 @@ export default class ChainMonitor extends EventEmitter {
       }
       this.chainLogger.debug("Fetched bytecode", { address });
       return bytecode;
-    } catch (err: any) {
-      this.chainLogger.error("Error fetching bytecode", { address, err });
+    } catch (error: any) {
+      this.chainLogger.error("Error fetching bytecode", { address, error });
       return null;
     }
   }
@@ -224,7 +238,7 @@ export default class ChainMonitor extends EventEmitter {
       }
 
       await new Promise((resolve) =>
-        setTimeout(resolve, this.bytecodeInterval)
+        setTimeout(resolve, this.bytecodeInterval),
       );
     }
 
@@ -238,9 +252,10 @@ export default class ChainMonitor extends EventEmitter {
   // Gets the contract bytecode, decodes the metadata hash, assembles the contract's files from DecentralizedStorage, and sends them to Sourcify servers.
   private processNewContract = async (
     creatorTxHash: string,
-    address: string
+    address: string,
   ) => {
     try {
+      let metadataHash: FileHash;
       const bytecode = await this.getBytecodeWithRetries(address);
       if (!bytecode) {
         this.chainLogger.warn("Could not fetch bytecode for contract", {
@@ -248,12 +263,20 @@ export default class ChainMonitor extends EventEmitter {
         });
         return;
       }
-      const cborData = bytecodeDecode(bytecode);
-      let metadataHash: FileHash;
       try {
+        /**
+         * We decode the bytecode using `AuxdataStyle.SOLIDITY` since Solidity is currently
+         * the only smart contract language that includes metadata information in its bytecode.
+         * This metadata contains an IPFS CID that points to a JSON file with the contract's
+         * source code and compiler settings.
+         */
+        const cborData = bytecodeDecode(bytecode, AuxdataStyle.SOLIDITY);
         metadataHash = FileHash.fromCborData(cborData);
       } catch (err: any) {
-        this.chainLogger.info("Error getting metadatahash", { address, err });
+        this.chainLogger.info("Error extracting cborAuxdata or metadata hash", {
+          address,
+          err,
+        });
         return;
       }
 
@@ -269,7 +292,7 @@ export default class ChainMonitor extends EventEmitter {
         metadataHash,
         address,
         this.sourcifyChain.chainId,
-        this.sourceFetchers
+        this.sourceFetchers,
       );
       this.chainLogger.debug("New pending contract", { address, metadataHash });
       try {
@@ -278,7 +301,7 @@ export default class ChainMonitor extends EventEmitter {
         this.chainLogger.info("Couldn't assemble contract", { address, err });
         return;
       }
-      if (!isEmpty(pendingContract.pendingSources)) {
+      if (!this.isEmpty(pendingContract.pendingSources)) {
         logger.warn("PendingSources not empty", {
           address: pendingContract.address,
           pendingSources: pendingContract.pendingSources,
@@ -292,22 +315,72 @@ export default class ChainMonitor extends EventEmitter {
       });
 
       this.sourcifyServerURLs.forEach(async (url) => {
-        try {
-          await pendingContract.sendToSourcifyServer(url, creatorTxHash);
-        } catch (err: any) {
-          this.chainLogger.error("Error sending contract to Sourcify server", {
-            url,
-            err,
-            address,
-          });
+        // Setup retry mechanism
+        let sourcifyRequestAttempt = 0;
+        while (
+          sourcifyRequestAttempt < this.sourcifyRequestOptions.maxRetries
+        ) {
+          try {
+            await pendingContract.sendToSourcifyServer(url, creatorTxHash);
+            break;
+          } catch (error: any) {
+            this.chainLogger.error(
+              "Error sending contract to Sourcify server",
+              {
+                url,
+                error,
+                address,
+                sourcifyRequestAttempt,
+              },
+            );
+
+            // If request fails increment number of attempts
+            sourcifyRequestAttempt++;
+
+            if (
+              sourcifyRequestAttempt < this.sourcifyRequestOptions.maxRetries
+            ) {
+              // If number of attempts is less than maxRetries, wait and retry
+              await new Promise((resolve) =>
+                setTimeout(resolve, this.sourcifyRequestOptions.retryDelay),
+              );
+            } else {
+              // If number of attempts >= maxRetries throw Error
+              this.chainLogger.error(
+                "Failed to send contract to Sourcify server after multiple attempts.",
+                {
+                  url,
+                  error,
+                  address,
+                  sourcifyRequestAttempt,
+                },
+              );
+            }
+          }
         }
       });
-    } catch (err: any) {
-      this.chainLogger.error("Error processing bytecode", { address, err });
+    } catch (error: any) {
+      this.chainLogger.error("Error processing bytecode", { address, error });
     }
   };
-}
 
-function isEmpty(obj: object): boolean {
-  return !Object.keys(obj).length && obj.constructor === Object;
+  private startBlockPauseLogging = (): void => {
+    this.blockPauseLogInterval = setInterval(() => {
+      this.chainLogger.info("Current block pause", {
+        chainId: this.sourcifyChain.chainId,
+        blockInterval: this.blockInterval,
+      });
+    }, 60000); // Log every 60 seconds (1 minute)
+  };
+
+  private stopBlockPauseLogging = (): void => {
+    if (this.blockPauseLogInterval) {
+      clearInterval(this.blockPauseLogInterval);
+      this.blockPauseLogInterval = null;
+    }
+  };
+
+  private isEmpty(obj: object): boolean {
+    return !Object.keys(obj).length && obj.constructor === Object;
+  }
 }

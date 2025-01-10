@@ -1,18 +1,19 @@
 /* eslint-disable @typescript-eslint/no-var-requires */
 import path from 'path';
 import { Match, Metadata } from '../src/lib/types';
-import Ganache from 'ganache';
 import {
   /* callContractMethodWithTx, */
   checkAndVerifyDeployed,
-  checkFilesFromContractFolder,
+  checkFilesWithMetadataFromContractFolder,
   deployCheckAndVerify,
   deployFromAbiAndBytecode,
   expectMatch,
+  vyperCompiler,
 } from './utils';
 import { describe, it, before } from 'mocha';
 import { expect } from 'chai';
 import {
+  VyperCheckedContract,
   SourcifyChain,
   calculateCreate2Address,
   /* 
@@ -23,41 +24,48 @@ import {
   replaceImmutableReferences,
   verifyCreate2,
   verifyDeployed,
+  SolidityCheckedContract,
 } from '../src';
 
 import fs from 'fs';
 import { JsonRpcSigner } from 'ethers';
 import { findSolcPlatform } from './compiler/solidityCompiler';
+import { ChildProcess } from 'child_process';
+import {
+  startHardhatNetwork,
+  stopHardhatNetwork,
+} from './hardhat-network-helper';
+import { AuxdataStyle } from '@ethereum-sourcify/bytecode-utils';
 
-const ganacheServer = Ganache.server({
-  wallet: { totalAccounts: 1 },
-  chain: { chainId: 0, networkId: 0 },
-});
-const GANACHE_PORT = 8544;
+const HARDHAT_PORT = 8544;
 
 const UNUSED_ADDRESS = '0x1F98431c8aD98523631AE4a59f267346ea31F984'; // checksum valid
 
-const ganacheChain = {
-  name: 'ganache',
-  shortName: 'ganache',
-  chainId: 0,
-  networkId: 0,
-  nativeCurrency: {
-    name: 'Ether',
-    symbol: 'ETH',
-    decimals: 18,
-  },
-  rpc: [`http://localhost:${GANACHE_PORT}`],
+const hardhatChain = {
+  name: 'Hardhat Network Localhost',
+  shortName: 'Hardhat Network',
+  chainId: 31337,
+  faucets: [],
+  infoURL: 'localhost',
+  nativeCurrency: { name: 'localETH', symbol: 'localETH', decimals: 18 },
+  network: 'testnet',
+  networkId: 31337,
+  rpc: [`http://127.0.0.1:${HARDHAT_PORT}`],
   supported: true,
 };
-const sourcifyChainGanache: SourcifyChain = new SourcifyChain(ganacheChain);
+const sourcifyChainHardhat: SourcifyChain = new SourcifyChain(hardhatChain);
 
+let hardhatNodeProcess: ChildProcess;
 let signer: JsonRpcSigner;
 
 describe('lib-sourcify tests', () => {
   before(async () => {
-    await ganacheServer.listen(GANACHE_PORT);
-    signer = await sourcifyChainGanache.providers[0].getSigner();
+    hardhatNodeProcess = await startHardhatNetwork(HARDHAT_PORT);
+    signer = await sourcifyChainHardhat.providers[0].getSigner();
+  });
+
+  after(async () => {
+    await stopHardhatNetwork(hardhatNodeProcess);
   });
 
   describe('Verification tests', () => {
@@ -65,8 +73,8 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(__dirname, 'sources', 'Storage');
       const { match, contractAddress } = await deployCheckAndVerify(
         contractFolderPath,
-        sourcifyChainGanache,
-        signer
+        sourcifyChainHardhat,
+        signer,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -76,16 +84,16 @@ describe('lib-sourcify tests', () => {
       const modifiedContractFolderPath = path.join(
         __dirname,
         'sources',
-        'StorageModified'
+        'StorageModified',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
       const match = await checkAndVerifyDeployed(
         modifiedContractFolderPath, // Using the modified contract
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
 
       expectMatch(match, 'partial', contractAddress);
@@ -96,23 +104,23 @@ describe('lib-sourcify tests', () => {
       const wrongContractFolderPath = path.join(
         __dirname,
         'sources',
-        'UsingLibrary'
+        'UsingLibrary',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
       try {
         await checkAndVerifyDeployed(
           wrongContractFolderPath, // Using the wrong contract
-          sourcifyChainGanache,
-          contractAddress
+          sourcifyChainHardhat,
+          contractAddress,
         );
         throw new Error('Should have failed');
       } catch (err) {
         if (err instanceof Error) {
           expect(err.message).to.equal(
-            "The deployed and recompiled bytecode don't match."
+            "The deployed and recompiled bytecode don't match.",
           );
         } else {
           throw err;
@@ -124,15 +132,15 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(__dirname, 'sources', 'Storage');
       const match = await checkAndVerifyDeployed(
         contractFolderPath, // Using the wrong contract
-        sourcifyChainGanache,
-        UNUSED_ADDRESS
+        sourcifyChainHardhat,
+        UNUSED_ADDRESS,
       );
       expectMatch(
         match,
         null,
         UNUSED_ADDRESS,
         undefined,
-        `Chain #${sourcifyChainGanache.chainId} does not have a contract deployed at ${UNUSED_ADDRESS}.`
+        `Chain #${sourcifyChainHardhat.chainId} does not have a contract deployed at ${UNUSED_ADDRESS}.`,
       );
     });
 
@@ -141,12 +149,12 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'UsingLibrary'
+        'UsingLibrary',
       );
       const { match, contractAddress } = await deployCheckAndVerify(
         contractFolderPath,
-        sourcifyChainGanache,
-        signer
+        sourcifyChainHardhat,
+        signer,
       );
       const expectedLibraryMap = {
         __$da572ae5e60c838574a0f88b27a0543803$__:
@@ -159,12 +167,12 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'StorageViaIR'
+        'StorageViaIR',
       );
       const { match, contractAddress } = await deployCheckAndVerify(
         contractFolderPath,
-        sourcifyChainGanache,
-        signer
+        sourcifyChainHardhat,
+        signer,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -173,62 +181,60 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithImmutables'
+        'WithImmutables',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
         contractFolderPath,
-        ['12345']
+        ['12345'],
       );
 
       const match = await checkAndVerifyDeployed(
         contractFolderPath,
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
 
     it('should verify a create2 contract', async () => {
       const contractFolderPath = path.join(__dirname, 'sources', 'Create2');
-      const checkedContracts = await checkFilesFromContractFolder(
-        contractFolderPath
-      );
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
       const saltNum = 12345;
       const saltHex = '0x' + saltNum.toString(16);
       const match = await verifyCreate2(
-        checkedContracts[0],
+        checkedContracts[0] as SolidityCheckedContract,
         '0xd9145CCE52D386f254917e481eB44e9943F39138',
         saltHex,
         '0x801B9c0Ee599C3E5ED60e4Ec285C95fC9878Ee64',
-        '0x0000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc40000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc4'
+        '0x0000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc40000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc4',
       );
       expectMatch(
         match,
         'perfect',
-        '0x801B9c0Ee599C3E5ED60e4Ec285C95fC9878Ee64'
+        '0x801B9c0Ee599C3E5ED60e4Ec285C95fC9878Ee64',
       );
     });
 
     it('should verify fail to a create2 contract with wrong address', async () => {
       const contractFolderPath = path.join(__dirname, 'sources', 'Create2');
-      const checkedContracts = await checkFilesFromContractFolder(
-        contractFolderPath
-      );
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
       const saltNum = 12345;
       const saltHex = '0x' + saltNum.toString(16);
       try {
         await verifyCreate2(
-          checkedContracts[0],
+          checkedContracts[0] as SolidityCheckedContract,
           '0xd9145CCE52D386f254917e481eB44e9943F39138',
           saltHex,
           UNUSED_ADDRESS,
-          '0x0000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc40000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc4'
+          '0x0000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc40000000000000000000000005b38da6a701c568545dcfcb03fcb875f56beddc4',
         );
       } catch (err) {
         if (err instanceof Error) {
           expect(err.message).to.equal(
-            `The provided create2 address doesn't match server's generated one. Expected: 0x801B9c0Ee599C3E5ED60e4Ec285C95fC9878Ee64 ; Received: ${UNUSED_ADDRESS} ;`
+            `The provided create2 address doesn't match server's generated one. Expected: 0x801B9c0Ee599C3E5ED60e4Ec285C95fC9878Ee64 ; Received: ${UNUSED_ADDRESS} ;`,
           );
         } else {
           throw err;
@@ -240,12 +246,12 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'StorageInliner'
+        'StorageInliner',
       );
       const { match, contractAddress } = await deployCheckAndVerify(
         contractFolderPath,
-        sourcifyChainGanache,
-        signer
+        sourcifyChainHardhat,
+        signer,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -343,17 +349,17 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WrongMetadata'
+        'WrongMetadata',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
 
       const match = await checkAndVerifyDeployed(
         contractFolderPath,
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -362,30 +368,29 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(__dirname, 'sources', 'Storage');
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
 
-      const checkedContracts = await checkFilesFromContractFolder(
-        contractFolderPath
-      );
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
 
       // Get the unsorted metadata
       const metadataPath = path.join(
         path.join(__dirname, 'sources', 'StorageUnsortedMetadata'),
-        'metadata.json'
+        'metadata.json',
       );
       const metadataBuffer = fs.readFileSync(metadataPath);
 
       // Replace the metadata witht he unsorted one
-      checkedContracts[0].initSolcJsonInput(
+      (checkedContracts[0] as SolidityCheckedContract).initSolcJsonInput(
         JSON.parse(metadataBuffer.toString()),
-        checkedContracts[0].solidity
+        checkedContracts[0].sources,
       );
 
       const match = await verifyDeployed(
         checkedContracts[0],
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -394,17 +399,17 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'CallProtectionForLibraries'
+        'CallProtectionForLibraries',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
 
       const match = await checkAndVerifyDeployed(
         contractFolderPath,
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -413,17 +418,17 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'CallProtectionForLibrariesViaIR'
+        'CallProtectionForLibrariesViaIR',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
 
       const match = await checkAndVerifyDeployed(
         contractFolderPath,
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -435,19 +440,19 @@ describe('lib-sourcify tests', () => {
       // can't really run this if we can't run a platform-native binary but only Emscripten (solc-js)
       if (!solcPlatform) {
         console.log(
-          `skipping test as the running machine can't run a platform-native binary. The platform and architechture is ${process.platform} ${process.arch}`
+          `skipping test as the running machine can't run a platform-native binary. The platform and architechture is ${process.platform} ${process.arch}`,
         );
         this.skip();
       }
       // The artifact has the bytecode from the Emscripten compiler.
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
       const match = await checkAndVerifyDeployed(
         contractFolderPath,
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
     });
@@ -457,34 +462,328 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'ViaIRUnoptimizedMismatch'
+        'ViaIRUnoptimizedMismatch',
       );
       const solcPlatform = findSolcPlatform();
       // can't really run this if we can't run a platform-native binary but only Emscripten (solc-js)
       if (!solcPlatform) {
         console.log(
-          `skipping test as the running machine can't run a platform-native binary. The platform and architechture is ${process.platform} ${process.arch}`
+          `skipping test as the running machine can't run a platform-native binary. The platform and architechture is ${process.platform} ${process.arch}`,
         );
         this.skip();
       }
       // The artifact has the bytecode from the Emscripten compiler.
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
-        contractFolderPath
+        contractFolderPath,
       );
       const match = await checkAndVerifyDeployed(
         contractFolderPath,
-        sourcifyChainGanache,
-        contractAddress
+        sourcifyChainHardhat,
+        contractAddress,
       );
       expectMatch(match, 'perfect', contractAddress);
+    });
+  });
+
+  it('should rewrite metadata on CheckedContract after recompilation', async () => {
+    const contractFolderPath = path.join(
+      __dirname,
+      'sources',
+      'MetadataRewriting',
+      'contract',
+    );
+    const { contractAddress } = await deployFromAbiAndBytecode(
+      signer,
+      contractFolderPath,
+      [
+        '0x39f0bd56c1439a22ee90b4972c16b7868d161981',
+        '0x000000000000000000000000000000000000dead',
+        '0x0000000000000000000000000000000000000000000000000000000000000000',
+      ],
+    );
+    const checkedContracts =
+      await checkFilesWithMetadataFromContractFolder(contractFolderPath);
+
+    const match = await verifyDeployed(
+      checkedContracts[0],
+      sourcifyChainHardhat,
+      contractAddress,
+    );
+    expectMatch(match, 'perfect', contractAddress);
+
+    const correctMetadataRaw = fs
+      .readFileSync(
+        path.join(
+          __dirname,
+          'sources',
+          'MetadataRewriting',
+          'correct-metadata.json',
+        ),
+      )
+      .toString();
+
+    expect(checkedContracts[0].metadata).to.deep.equal(
+      JSON.parse(correctMetadataRaw),
+    );
+    expect(checkedContracts[0].metadataRaw).to.equal(correctMetadataRaw);
+  });
+
+  // For https://github.com/ethereum/sourcify/pull/1623
+  it('should verify a contract partially with the creation bytecode after transformation fields are normalized', async () => {
+    const contractFolderPath = path.join(__dirname, 'sources', 'Constructor');
+    const { contractAddress, txHash } = await deployFromAbiAndBytecode(
+      signer,
+      contractFolderPath,
+      ['12345'],
+    );
+
+    const modifiedContractFolderPath = path.join(
+      __dirname,
+      'sources',
+      'ConstructorModified',
+    );
+
+    const match = await checkAndVerifyDeployed(
+      modifiedContractFolderPath,
+      sourcifyChainHardhat,
+      contractAddress,
+      txHash,
+    );
+    expect(match.creationMatch).to.equal('partial');
+    expect(match.creationTransformations).to.deep.equal([
+      {
+        type: 'replace',
+        reason: 'cborAuxdata',
+        offset: 279,
+        id: '1',
+      },
+      {
+        type: 'insert',
+        reason: 'constructorArguments',
+        offset: 332,
+      },
+    ]);
+    expect(match.creationTransformationValues).to.deep.equal({
+      cborAuxdata: {
+        '1': '0xa26469706673582212208a693a7ed29129e25fc67a65f83955fb3d86f5fbc378940d697827714b955df564736f6c634300081a0033',
+      },
+      constructorArguments:
+        '0x0000000000000000000000000000000000000000000000000000000000003039',
+    });
+  });
+
+  describe('Vyper', () => {
+    const deployDefaultVyperContract = async (artifactSubfolder?: string) => {
+      const contractFolderPath = path.join(
+        __dirname,
+        'sources',
+        'Vyper',
+        'testcontract',
+      );
+      const contractFileName = 'test.vy';
+      const contractFileContent = await fs.promises.readFile(
+        path.join(contractFolderPath, contractFileName),
+      );
+      const artifactFolderPath = artifactSubfolder
+        ? path.join(contractFolderPath, artifactSubfolder)
+        : contractFolderPath;
+      const { contractAddress, txHash } = await deployFromAbiAndBytecode(
+        signer,
+        artifactFolderPath,
+        [],
+      );
+
+      return {
+        contractAddress,
+        creationTxHash: txHash,
+        contractFileContent,
+        contractFileName,
+      };
+    };
+
+    it('should verify a vyper contract', async () => {
+      const { contractAddress, contractFileContent, contractFileName } =
+        await deployDefaultVyperContract();
+
+      const checkedContract = new VyperCheckedContract(
+        vyperCompiler,
+        '0.3.10+commit.91361694',
+        contractFileName,
+        contractFileName.split('.')[0],
+        {
+          evmVersion: 'istanbul',
+          outputSelection: {
+            '*': ['evm.bytecode'],
+          },
+        },
+        {
+          [contractFileName]: contractFileContent.toString(),
+        },
+      );
+      const match = await verifyDeployed(
+        checkedContract,
+        sourcifyChainHardhat,
+        contractAddress,
+      );
+
+      expectMatch(match, 'partial', contractAddress);
+    });
+
+    it('should verify a vyper contract with immutable references and constructor arguments', async () => {
+      const contractFolderPath = path.join(
+        __dirname,
+        'sources',
+        'Vyper',
+        'withImmutables',
+      );
+      const contractFileName = 'test.vy';
+      const vyperContent = await fs.promises.readFile(
+        path.join(contractFolderPath, contractFileName),
+      );
+
+      const { contractAddress, txHash } = await deployFromAbiAndBytecode(
+        signer,
+        contractFolderPath,
+        [5],
+      );
+      const checkedContract = new VyperCheckedContract(
+        vyperCompiler,
+        '0.4.0+commit.e9db8d9f',
+        contractFileName,
+        contractFileName.split('.')[0],
+        {
+          evmVersion: 'london',
+          outputSelection: {
+            '*': ['evm.bytecode'],
+          },
+          optimize: 'codesize',
+        },
+        {
+          [contractFileName]: vyperContent.toString(),
+        },
+      );
+      const match = await verifyDeployed(
+        checkedContract,
+        sourcifyChainHardhat,
+        contractAddress,
+        txHash,
+      );
+
+      expectMatch(match, 'partial', contractAddress);
+      expect(match.creationMatch).to.equal('partial');
+      expect(match.creationTransformations).to.deep.equal([
+        {
+          type: 'insert',
+          reason: 'constructorArguments',
+          offset: 245,
+        },
+      ]);
+      expect(match.creationTransformationValues).to.deep.equal({
+        constructorArguments:
+          '0x0000000000000000000000000000000000000000000000000000000000000005',
+      });
+      expect(match.runtimeTransformations).to.deep.equal([
+        {
+          type: 'insert',
+          reason: 'immutable',
+          offset: 167,
+          id: '0',
+        },
+      ]);
+      expect(match.runtimeTransformationValues).to.deep.equal({
+        immutables: {
+          '0': '0x000000000000000000000000f39fd6e51aad88f6f4ce6ab8827279cfffb92266000000000000000000000000000000000000000000000000000000000000000500000000000000000000000000000000000000000000000000eca7a2f8618d6f',
+        },
+      });
+    });
+
+    it('should fail to verify a different Vyper contract', async () => {
+      const { contractAddress, contractFileName } =
+        await deployDefaultVyperContract();
+
+      const wrongContractContent = await fs.promises.readFile(
+        path.join(
+          __dirname,
+          'sources',
+          'Vyper',
+          'testcontract2',
+          contractFileName,
+        ),
+      );
+      const checkedContract = new VyperCheckedContract(
+        vyperCompiler,
+        '0.3.10+commit.91361694',
+        contractFileName,
+        contractFileName.split('.')[0],
+        {
+          evmVersion: 'istanbul',
+          outputSelection: {
+            '*': ['evm.bytecode'],
+          },
+        },
+        {
+          [contractFileName]: wrongContractContent.toString(),
+        },
+      );
+
+      await expect(
+        verifyDeployed(checkedContract, sourcifyChainHardhat, contractAddress),
+      ).to.be.rejectedWith("The deployed and recompiled bytecode don't match.");
+    });
+
+    it('should have transformation information for a contract compiled with Vyper 0.3.4', async () => {
+      const {
+        contractAddress,
+        contractFileName,
+        contractFileContent,
+        creationTxHash,
+      } = await deployDefaultVyperContract('wrongAuxdata');
+
+      const checkedContract = new VyperCheckedContract(
+        vyperCompiler,
+        '0.3.10+commit.91361694',
+        contractFileName,
+        contractFileName.split('.')[0],
+        {
+          evmVersion: 'istanbul',
+          outputSelection: {
+            '*': ['evm.bytecode'],
+          },
+        },
+        {
+          [contractFileName]: contractFileContent.toString(),
+        },
+      );
+      const match = await verifyDeployed(
+        checkedContract,
+        sourcifyChainHardhat,
+        contractAddress,
+        creationTxHash,
+      );
+
+      expect(match.creationTransformations).to.deep.equal([
+        {
+          type: 'replace',
+          reason: 'cborAuxdata',
+          offset: 158,
+          id: '1',
+        },
+      ]);
+      expect(match.creationTransformationValues).to.deep.equal({
+        cborAuxdata: {
+          '1': '0x84188f8000a1657679706572830003090012',
+        },
+      });
+      expect(match.runtimeTransformations).to.be.deep.equal([]);
+      expect(match.runtimeTransformationValues).to.be.deep.equal({});
     });
   });
 
   describe('Unit tests', function () {
     describe('SourcifyChain', () => {
       it("Should fail to instantiate with empty rpc's", function () {
-        const emptyRpc = { ...ganacheChain, rpc: [] };
+        const emptyRpc = { ...hardhatChain, rpc: [] };
         try {
           new SourcifyChain(emptyRpc);
           throw new Error('Should have failed');
@@ -494,7 +793,7 @@ describe('lib-sourcify tests', () => {
               'No RPC provider was given for this chain with id ' +
                 emptyRpc.chainId +
                 ' and name ' +
-                emptyRpc.name
+                emptyRpc.name,
             );
           } else {
             throw err;
@@ -502,23 +801,23 @@ describe('lib-sourcify tests', () => {
         }
       });
       it('Should getBlock', async function () {
-        const block = await sourcifyChainGanache.getBlock(0);
+        const block = await sourcifyChainHardhat.getBlock(0);
         expect(block?.number).equals(0);
       });
       it('Should getBlockNumber', async function () {
-        const blockNumber = await sourcifyChainGanache.getBlockNumber();
+        const blockNumber = await sourcifyChainHardhat.getBlockNumber();
         expect(blockNumber > 0);
       });
       it('Should fail to get non-existing transaction', async function () {
         try {
-          await sourcifyChainGanache.getTx(
-            '0x79ab5d59fcb70ca3f290aa39ed3f156a5c4b3897176aebd455cd20b6a30b107a'
+          await sourcifyChainHardhat.getTx(
+            '0x79ab5d59fcb70ca3f290aa39ed3f156a5c4b3897176aebd455cd20b6a30b107a',
           );
           throw new Error('Should have failed');
         } catch (err) {
           if (err instanceof Error) {
             expect(err.message).to.equal(
-              'None of the RPCs responded fetching tx 0x79ab5d59fcb70ca3f290aa39ed3f156a5c4b3897176aebd455cd20b6a30b107a on chain 0'
+              `None of the RPCs responded fetching tx 0x79ab5d59fcb70ca3f290aa39ed3f156a5c4b3897176aebd455cd20b6a30b107a on chain ${hardhatChain.chainId}`,
             );
           } else {
             throw err;
@@ -531,8 +830,8 @@ describe('lib-sourcify tests', () => {
         calculateCreate2Address(
           '0x71CB05EE1b1F506fF321Da3dac38f25c0c9ce6E1',
           '123',
-          '0x00'
-        )
+          '0x00',
+        ),
       ).equals('0xA0279ea82DF644AFb68FdD4aDa5848C5Df9F116B');
     });
 
@@ -555,7 +854,8 @@ describe('lib-sourcify tests', () => {
         immutableReferences,
         runtimeBytecode,
         [],
-        {}
+        {},
+        AuxdataStyle.SOLIDITY,
       );
 
       expect(replacedBytecode).equals(recompiledRuntimeBytecode);
@@ -592,7 +892,7 @@ describe('lib-sourcify tests', () => {
       );
       const childAddress = txReceipt.events.ChildCreated.returnValues[0];
 
-      const checkedContracts = await checkFilesFromContractFolder(
+      const checkedContracts = await checkFilesWithMetadataFromContractFolder(
         childFolderPath
       );
       const recompiled = await checkedContracts[0].recompile();
@@ -626,28 +926,27 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithImmutables'
+        'WithImmutables',
       );
       const { contractAddress } = await deployFromAbiAndBytecode(
         signer,
         contractFolderPath,
-        ['12345']
+        ['12345'],
       );
 
       // Get an arbitrary tx hash
       const { txHash: wrongCreatorTxHash } = await deployFromAbiAndBytecode(
         signer,
         contractFolderPath,
-        ['12345']
+        ['12345'],
       );
 
-      const checkedContracts = await checkFilesFromContractFolder(
-        contractFolderPath
-      );
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
       const recompiled = await checkedContracts[0].recompile();
       const match: Match = {
         address: contractAddress,
-        chainId: sourcifyChainGanache.chainId.toString(),
+        chainId: sourcifyChainHardhat.chainId.toString(),
         runtimeMatch: null,
         creationMatch: null,
       };
@@ -663,16 +962,17 @@ describe('lib-sourcify tests', () => {
         await matchWithCreationTx(
           match,
           recompiled.creationBytecode,
-          sourcifyChainGanache,
+          sourcifyChainHardhat,
           contractAddress,
           wrongCreatorTxHash,
           recompiledMetadata,
-          generateCreationCborAuxdataPositions
+          generateCreationCborAuxdataPositions,
+          recompiled.creationLinkReferences,
         );
       } catch (err) {
         if (err instanceof Error) {
           expect(err.message).to.equal(
-            "Creator transaction doesn't match the contract"
+            "Creator transaction doesn't match the contract",
           );
         } else {
           throw err;
@@ -686,31 +986,30 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithImmutables'
+        'WithImmutables',
       );
       const maliciousContractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithImmutablesCreationBytecodeAttack'
+        'WithImmutablesCreationBytecodeAttack',
       );
 
-      const maliciousArtifact = require(path.join(
-        maliciousContractFolderPath,
-        'artifact.json'
-      ));
+      const maliciousArtifact = require(
+        path.join(maliciousContractFolderPath, 'artifact.json'),
+      );
       const { contractAddress, txHash } = await deployFromAbiAndBytecode(
         signer,
         contractFolderPath,
-        ['12345']
+        ['12345'],
       );
 
-      const checkedContracts = await checkFilesFromContractFolder(
-        maliciousContractFolderPath
+      const checkedContracts = await checkFilesWithMetadataFromContractFolder(
+        maliciousContractFolderPath,
       );
       const recompiled = await checkedContracts[0].recompile();
       const match = {
         address: contractAddress,
-        chainId: sourcifyChainGanache.chainId.toString(),
+        chainId: sourcifyChainHardhat.chainId.toString(),
         runtimeMatch: null,
         creationMatch: null,
       };
@@ -725,11 +1024,12 @@ describe('lib-sourcify tests', () => {
       await matchWithCreationTx(
         match,
         maliciousArtifact.bytecode,
-        sourcifyChainGanache,
+        sourcifyChainHardhat,
         contractAddress,
         txHash,
         recompiledMetadata,
-        generateCreationCborAuxdataPositions
+        generateCreationCborAuxdataPositions,
+        recompiled.creationLinkReferences,
       );
       expectMatch(match, null, contractAddress, undefined); // status is null
     });
@@ -738,7 +1038,7 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithImmutables'
+        'WithImmutables',
       );
 
       const { contractAddress, txHash: creatorTxHash } =
@@ -747,15 +1047,15 @@ describe('lib-sourcify tests', () => {
       const maliciousContractFolderPath = path.join(
         __dirname,
         'sources',
-        'AbstractCreationBytecodeAttack'
+        'AbstractCreationBytecodeAttack',
       );
-      const checkedContracts = await checkFilesFromContractFolder(
-        maliciousContractFolderPath
+      const checkedContracts = await checkFilesWithMetadataFromContractFolder(
+        maliciousContractFolderPath,
       );
       const recompiled = await checkedContracts[0].recompile();
       const match = {
         address: contractAddress,
-        chainId: sourcifyChainGanache.chainId.toString(),
+        chainId: sourcifyChainHardhat.chainId.toString(),
         runtimeMatch: null,
         creationMatch: null,
       };
@@ -770,11 +1070,12 @@ describe('lib-sourcify tests', () => {
       await matchWithCreationTx(
         match,
         recompiled.creationBytecode,
-        sourcifyChainGanache,
+        sourcifyChainHardhat,
         contractAddress,
         creatorTxHash,
         recompiledMetadata,
-        generateCreationCborAuxdataPositions
+        generateCreationCborAuxdataPositions,
+        recompiled.creationLinkReferences,
       );
       expectMatch(match, null, contractAddress, undefined); // status is null
     });
@@ -783,18 +1084,17 @@ describe('lib-sourcify tests', () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithImmutables'
+        'WithImmutables',
       );
       const { contractAddress, txHash: creatorTxHash } =
         await deployFromAbiAndBytecode(signer, contractFolderPath, ['12345']);
 
-      const checkedContracts = await checkFilesFromContractFolder(
-        contractFolderPath
-      );
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
       const recompiled = await checkedContracts[0].recompile();
       const match = {
         address: contractAddress,
-        chainId: sourcifyChainGanache.chainId.toString(),
+        chainId: sourcifyChainHardhat.chainId.toString(),
         runtimeMatch: null,
         creationMatch: null,
       };
@@ -808,11 +1108,12 @@ describe('lib-sourcify tests', () => {
       await matchWithCreationTx(
         match,
         recompiled.creationBytecode,
-        sourcifyChainGanache,
+        sourcifyChainHardhat,
         contractAddress,
         creatorTxHash,
         recompiledMetadata,
-        generateCreationCborAuxdataPositions
+        generateCreationCborAuxdataPositions,
+        recompiled.creationLinkReferences,
       );
       try {
         expect(match.creationMatch).to.equal('perfect');
@@ -823,22 +1124,22 @@ describe('lib-sourcify tests', () => {
       }
     });
 
-    it('find a partial match for a contract with multiple auxdatas and one of the "subcontract" was modified', async () => {
+    it('should find a perfect match for a contract that has a single metadata hash in the middle of the creation bytecode', async () => {
       const contractFolderPath = path.join(
         __dirname,
         'sources',
-        'WithMultipleAuxdatas'
+        'CBORInTheMiddle',
       );
+
       const { contractAddress, txHash: creatorTxHash } =
         await deployFromAbiAndBytecode(signer, contractFolderPath, []);
 
-      const checkedContracts = await checkFilesFromContractFolder(
-        contractFolderPath
-      );
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
       const recompiled = await checkedContracts[0].recompile();
       const match: Match = {
         address: contractAddress,
-        chainId: sourcifyChainGanache.chainId.toString(),
+        chainId: sourcifyChainHardhat.chainId.toString(),
         runtimeMatch: null,
         creationMatch: null,
       };
@@ -852,42 +1153,121 @@ describe('lib-sourcify tests', () => {
       await matchWithCreationTx(
         match,
         recompiled.creationBytecode,
-        sourcifyChainGanache,
+        sourcifyChainHardhat,
         contractAddress,
         creatorTxHash,
         recompiledMetadata,
-        generateCreationCborAuxdataPositions
+        generateCreationCborAuxdataPositions,
+        recompiled.creationLinkReferences,
+      );
+      // Must check the creationMatch
+      expect(match.creationMatch).to.equal('perfect');
+    });
+
+    it('should find a perfect match for a contract that has multiple metadata hashes in the middle of the creation bytecode', async () => {
+      const contractFolderPath = path.join(
+        __dirname,
+        'sources',
+        'CBORInTheMiddleFactory',
+      );
+      const { contractAddress, txHash: creatorTxHash } =
+        await deployFromAbiAndBytecode(signer, contractFolderPath, [
+          UNUSED_ADDRESS,
+        ]);
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
+      const recompiled = await checkedContracts[0].recompile();
+      const match: Match = {
+        address: contractAddress,
+        chainId: sourcifyChainHardhat.chainId.toString(),
+        runtimeMatch: null,
+        creationMatch: null,
+      };
+      const recompiledMetadata: Metadata = JSON.parse(recompiled.metadata);
+      const generateCreationCborAuxdataPositions = async () => {
+        if (!checkedContracts[0].creationBytecodeCborAuxdata) {
+          await checkedContracts[0].generateCborAuxdataPositions();
+        }
+        return checkedContracts[0].creationBytecodeCborAuxdata || {};
+      };
+      await matchWithCreationTx(
+        match,
+        recompiled.creationBytecode,
+        sourcifyChainHardhat,
+        contractAddress,
+        creatorTxHash,
+        recompiledMetadata,
+        generateCreationCborAuxdataPositions,
+        recompiled.creationLinkReferences,
+      );
+      expect(match.creationMatch).to.equal('perfect');
+    });
+
+    it('find a partial match for a contract with multiple auxdatas and one of the "subcontract" was modified', async () => {
+      const contractFolderPath = path.join(
+        __dirname,
+        'sources',
+        'WithMultipleAuxdatas',
+      );
+      const { contractAddress, txHash: creatorTxHash } =
+        await deployFromAbiAndBytecode(signer, contractFolderPath, []);
+
+      const checkedContracts =
+        await checkFilesWithMetadataFromContractFolder(contractFolderPath);
+      const recompiled = await checkedContracts[0].recompile();
+      const match: Match = {
+        address: contractAddress,
+        chainId: sourcifyChainHardhat.chainId.toString(),
+        runtimeMatch: null,
+        creationMatch: null,
+      };
+      const recompiledMetadata: Metadata = JSON.parse(recompiled.metadata);
+      const generateCreationCborAuxdataPositions = async () => {
+        if (!checkedContracts[0].creationBytecodeCborAuxdata) {
+          await checkedContracts[0].generateCborAuxdataPositions();
+        }
+        return checkedContracts[0].creationBytecodeCborAuxdata || {};
+      };
+      await matchWithCreationTx(
+        match,
+        recompiled.creationBytecode,
+        sourcifyChainHardhat,
+        contractAddress,
+        creatorTxHash,
+        recompiledMetadata,
+        generateCreationCborAuxdataPositions,
+        recompiled.creationLinkReferences,
       );
       try {
         expect(match.creationMatch).to.equal('partial');
         expect(match.address).to.equal(contractAddress);
         // expect every creationTransformationValues
         expect(match.creationTransformationValues?.cborAuxdata?.['1']).to.equal(
-          '0xa2646970667358221220fe338e4778c1623b5865cd4121849802c8ed68e688def4d95b606f2f02ec563e64736f6c63430008090033'
+          '0xa2646970667358221220fe338e4778c1623b5865cd4121849802c8ed68e688def4d95b606f2f02ec563e64736f6c63430008090033',
         );
         expect(match.creationTransformationValues?.cborAuxdata?.['2']).to.equal(
-          '0xa2646970667358221220bc654cadfb13b9ef229b6a2db4424f95dc4c52e3ae9b60648aa276f8eb0b3f8464736f6c63430008090033'
+          '0xa2646970667358221220bc654cadfb13b9ef229b6a2db4424f95dc4c52e3ae9b60648aa276f8eb0b3f8464736f6c63430008090033',
         );
         expect(match.creationTransformationValues?.cborAuxdata?.['3']).to.equal(
-          '0xa2646970667358221220eb4312065a8c0fb940ef11ef5853554a447a5325095ee0f8fbbbbfc43dbb1b7464736f6c63430008090033'
+          '0xa2646970667358221220eb4312065a8c0fb940ef11ef5853554a447a5325095ee0f8fbbbbfc43dbb1b7464736f6c63430008090033',
         );
 
         // expect every creationTransformations
         expect(match.creationTransformations).to.deep.include({
           type: 'replace',
-          reason: 'auxdata',
+          reason: 'cborAuxdata',
           offset: 4148,
           id: '1',
         });
         expect(match.creationTransformations).to.deep.include({
           type: 'replace',
-          reason: 'auxdata',
+          reason: 'cborAuxdata',
           offset: 2775,
           id: '2',
         });
         expect(match.creationTransformations).to.deep.include({
           type: 'replace',
-          reason: 'auxdata',
+          reason: 'cborAuxdata',
           offset: 4095,
           id: '3',
         });

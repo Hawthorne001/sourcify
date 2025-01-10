@@ -65,7 +65,7 @@ update_packages_and_changelog() {
     current_version="${versions[$index]}"
 
     prompt_execute_or_skip "selecting a version for $pkg_name" select_new_version "$pkg_name" "$current_version"
-    prompt_execute_or_skip "updating the chagelog for $pkg_name" update_changelog "$pkg_name" "${directories[$index]}"
+    prompt_execute_or_skip "updating the changelog for $pkg_name" update_changelog "$pkg_name" "${directories[$index]}"
   done
 }
 
@@ -173,7 +173,7 @@ function run_lerna_version() {
 ### We can't simply let lerna do this because CircleCI doesn't run when all tags are published
 ###
 # Priority packages whose tags should be pushed first in specific order
-declare -a priority_packages=("@ethereum-sourcify/bytecode-utils" "@ethereum-sourcify/contract-call-decoder" "@ethereum-sourcify/lib-sourcify")
+declare -a priority_packages=("@ethereum-sourcify/bytecode-utils" "@ethereum-sourcify/lib-sourcify")
 
 # Push tags one by one with a delay
 push_tag() {

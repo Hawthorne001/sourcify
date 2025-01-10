@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## sourcify-monitor@1.3.5 - 2025-01-08
+
+- Update dependencies
+
+
+## sourcify-monitor@1.3.4 - 2024-12-11
+
+- Update dependencies
+
+## sourcify-monitor@1.3.3 - 2024-10-29
+
+- Update monitor RPCs to public ones
+- Update packages
+
+## sourcify-monitor@1.3.2 - 2024-10-14
+
+- Update monitor RPCs
+- Update packages
+- Don't throw when unable to submit contracts to Sourcify servers
+
+## sourcify-monitor@1.3.1 - 2024-09-17
+
+- Allow generic ApiKeys for chains in chains.json
+- Log blockIntervals every min regularly
+- Update logging
+- Add tests for parsing authenticated RPCs
+- Update dependencies
+
+## sourcify-monitor@1.3.0 - 2024-08-29
+
+- Added retry mechanism when sending contracts to the Sourcify server.
+- Added custom headers for the IPFS gateway
+- Change chains that are being monitored by default
+- Update packages
+
+## sourcify-monitor@1.2.0 - 2024-07-25
+
+- Update dependencies
+- Refactor tests and use TS
+
 ## sourcify-monitor@1.1.14 - 2024-05-14
 
 - bump version

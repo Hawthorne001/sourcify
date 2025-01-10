@@ -1,3 +1,8 @@
+const {
+  WStorageIdentifiers,
+  RWStorageIdentifiers,
+} = require("../server/services/storageServices/identifiers");
+
 module.exports = {
   repositoryV1: {
     path: "/tmp/repositoryV1-test/",
@@ -7,5 +12,16 @@ module.exports = {
   },
   session: {
     storeType: "database",
+  },
+  storage: {
+    read: RWStorageIdentifiers.SourcifyDatabase,
+    writeOrWarn: [
+      RWStorageIdentifiers.RepositoryV1,
+      WStorageIdentifiers.S3Repository,
+    ],
+    writeOrErr: [
+      WStorageIdentifiers.RepositoryV2,
+      RWStorageIdentifiers.SourcifyDatabase,
+    ],
   },
 };

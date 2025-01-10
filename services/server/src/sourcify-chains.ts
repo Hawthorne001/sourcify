@@ -3,10 +3,11 @@ import {
   SourcifyChainMap,
   SourcifyChainsExtensionsObject,
   Chain,
-  AlchemyInfuraRPC,
+  APIKeyRPC,
   FetchRequestRPC,
+  BaseRPC,
+  TraceSupportedRPC,
 } from "@ethereum-sourcify/lib-sourcify";
-import { ValidationError } from "./common/errors";
 import { FetchRequest } from "ethers";
 import chainsRaw from "./chains.json";
 import rawSourcifyChainExtentions from "./sourcify-chains-default.json";
@@ -14,19 +15,23 @@ import logger from "./common/logger";
 import fs from "fs";
 import path from "path";
 
+import dotenv from "dotenv";
+
+dotenv.config();
+
 let sourcifyChainsExtensions: SourcifyChainsExtensionsObject = {};
 
 // If sourcify-chains.json exists, override sourcify-chains-default.json
 if (fs.existsSync(path.resolve(__dirname, "./sourcify-chains.json"))) {
   logger.warn(
-    "Overriding default chains: using sourcify-chains.json instead of sourcify-chains-default.json"
+    "Overriding default chains: using sourcify-chains.json instead of sourcify-chains-default.json",
   );
   const rawSourcifyChainExtentionsFromFile = fs.readFileSync(
     path.resolve(__dirname, "./sourcify-chains.json"),
-    "utf8"
+    "utf8",
   );
   sourcifyChainsExtensions = JSON.parse(
-    rawSourcifyChainExtentionsFromFile
+    rawSourcifyChainExtentionsFromFile,
   ) as SourcifyChainsExtensionsObject;
 }
 // sourcify-chains-default.json
@@ -38,7 +43,7 @@ else {
 // chains.json from ethereum-lists (chainId.network/chains.json)
 const allChains = chainsRaw as Chain[];
 
-const LOCAL_CHAINS: SourcifyChain[] = [
+export const LOCAL_CHAINS: SourcifyChain[] = [
   new SourcifyChain({
     name: "Ganache Localhost",
     shortName: "Ganache",
@@ -70,40 +75,80 @@ const LOCAL_CHAINS: SourcifyChain[] = [
  * SourcifyChain expects  url strings or ethers.js FetchRequest objects.
  */
 function buildCustomRpcs(
-  rpc: Array<string | AlchemyInfuraRPC | FetchRequestRPC>
+  sourcifyRpcs: Array<string | BaseRPC | APIKeyRPC | FetchRequestRPC>,
 ) {
-  return rpc.map((rpc) => {
-    // simple url
-    if (typeof rpc === "string") {
-      return rpc;
+  const traceSupportedRPCs: TraceSupportedRPC[] = [];
+  const rpc: (string | FetchRequest)[] = [];
+  const rpcWithoutApiKeys: string[] = [];
+  sourcifyRpcs.forEach((sourcifyRpc, index) => {
+    // simple url, can't have traceSupport
+    if (typeof sourcifyRpc === "string") {
+      rpc.push(sourcifyRpc);
+      rpcWithoutApiKeys.push(sourcifyRpc);
+      return;
+    }
+
+    if (sourcifyRpc.traceSupport) {
+      traceSupportedRPCs.push({
+        type: sourcifyRpc.traceSupport,
+        index,
+      });
+    }
+
+    if (sourcifyRpc.type === "BaseRPC") {
+      rpc.push(sourcifyRpc.url);
+      rpcWithoutApiKeys.push(sourcifyRpc.url);
+      return;
     }
     // Fill in the api keys
-    else if (rpc.type === "Alchemy") {
-      return rpc.url.replace(
-        "{ALCHEMY_API_KEY}",
-        process.env[rpc.apiKeyEnvName] || process.env["ALCHEMY_API_KEY"] || ""
-      );
-    } else if (rpc.type === "Infura") {
-      return rpc.url.replace(
-        "{INFURA_API_KEY}",
-        process.env[rpc.apiKeyEnvName] || ""
-      );
+    else if (sourcifyRpc.type === "APIKeyRPC") {
+      const apiKey =
+        process.env[sourcifyRpc.apiKeyEnvName] || process.env["API_KEY"] || "";
+      if (!apiKey) {
+        // API key is required for all APIKeyRPCs
+        if (process.env.CI === "true") {
+          logger.warn(
+            `API key not found for ${sourcifyRpc.apiKeyEnvName}, skipping on CI`,
+          );
+          return;
+        } else {
+          throw new Error(`API key not found for ${sourcifyRpc.apiKeyEnvName}`);
+        }
+      }
+      let url = sourcifyRpc.url.replace("{API_KEY}", apiKey);
+
+      const subDomain = process.env[sourcifyRpc.subDomainEnvName || ""];
+      if (subDomain) {
+        // subDomain is optional
+        url = url.replace("{SUBDOMAIN}", subDomain);
+      }
+      rpc.push(url);
+      rpcWithoutApiKeys.push(sourcifyRpc.url);
+      return;
     }
     // Build ethers.js FetchRequest object for custom rpcs with auth headers
-    else if (rpc.type === "FetchRequest") {
-      const ethersFetchReq = new FetchRequest(rpc.url);
+    else if (sourcifyRpc.type === "FetchRequest") {
+      const ethersFetchReq = new FetchRequest(sourcifyRpc.url);
       ethersFetchReq.setHeader("Content-Type", "application/json");
-      const headers = rpc.headers;
+      const headers = sourcifyRpc.headers;
       if (headers) {
         headers.forEach(({ headerName, headerEnvName }) => {
           const headerValue = process.env[headerEnvName];
           ethersFetchReq.setHeader(headerName, headerValue || "");
         });
       }
-      return ethersFetchReq;
+      rpc.push(ethersFetchReq);
+      rpcWithoutApiKeys.push(sourcifyRpc.url);
+      return;
     }
-    throw new Error(`Invalid rpc type: ${rpc.type}`);
+    throw new Error(`Invalid rpc type: ${JSON.stringify(sourcifyRpc)}`);
   });
+  return {
+    rpc,
+    rpcWithoutApiKeys,
+    traceSupportedRPCs:
+      traceSupportedRPCs.length > 0 ? traceSupportedRPCs : undefined,
+  };
 }
 
 const sourcifyChainsMap: SourcifyChainMap = {};
@@ -135,13 +180,29 @@ for (const i in allChains) {
 
   if (chainId in sourcifyChainsExtensions) {
     const sourcifyExtension = sourcifyChainsExtensions[chainId];
+
+    let rpc: (string | FetchRequest)[] = [];
+    let rpcWithoutApiKeys: string[] = [];
+    let traceSupportedRPCs: TraceSupportedRPC[] | undefined = undefined;
+    if (sourcifyExtension.rpc) {
+      ({ rpc, rpcWithoutApiKeys, traceSupportedRPCs } = buildCustomRpcs(
+        sourcifyExtension.rpc,
+      ));
+    }
+    // Fallback to rpcs of chains.json
+    if (!rpc.length) {
+      ({ rpc, rpcWithoutApiKeys, traceSupportedRPCs } = buildCustomRpcs(
+        chain.rpc,
+      ));
+    }
+
     // sourcifyExtension is spread later to overwrite chains.json values, rpc specifically
     const sourcifyChain = new SourcifyChain({
       ...chain,
       ...sourcifyExtension,
-      rpc: sourcifyExtension.rpc
-        ? buildCustomRpcs(sourcifyExtension.rpc)
-        : chain.rpc, // avoid rpc ending up as undefined
+      rpc,
+      rpcWithoutApiKeys,
+      traceSupportedRPCs,
     });
     sourcifyChainsMap[chainId] = sourcifyChain;
   }
@@ -159,115 +220,36 @@ if (missingChains.length > 0) {
   if (process.env.CIRCLE_PROJECT_REPONAME === "sourcify") {
     throw new Error(
       `Some of the chains in sourcify-chains.json are not in chains.json: ${missingChains.join(
-        ","
-      )}`
+        ",",
+      )}`,
     );
   }
   // Don't throw for forks or others running Sourcify, instead add them to sourcifyChainsMap
   else {
     logger.warn(
       `Some of the chains in sourcify-chains.json are not in chains.json`,
-      missingChains
+      missingChains,
     );
     missingChains.forEach((chainId) => {
       const chain = sourcifyChainsExtensions[chainId];
       if (!chain.rpc) {
         throw new Error(
-          `Chain ${chainId} is missing rpc in sourcify-chains.json`
+          `Chain ${chainId} is missing rpc in sourcify-chains.json`,
         );
       }
+      const { rpc, rpcWithoutApiKeys, traceSupportedRPCs } = buildCustomRpcs(
+        chain.rpc,
+      );
       sourcifyChainsMap[chainId] = new SourcifyChain({
         name: chain.sourcifyName,
         chainId: parseInt(chainId),
         supported: chain.supported,
-        rpc: buildCustomRpcs(chain.rpc),
+        rpc,
+        rpcWithoutApiKeys,
+        traceSupportedRPCs,
       });
     });
   }
 }
 
-const sourcifyChainsArray = getSortedChainsArray(sourcifyChainsMap);
-const supportedChainsArray = sourcifyChainsArray.filter(
-  (chain) => chain.supported
-);
-// convert supportedChainArray to a map where the key is the chainId
-const supportedChainsMap = supportedChainsArray.reduce(
-  (map, chain) => ((map[chain.chainId.toString()] = chain), map),
-  <SourcifyChainMap>{}
-);
-
-logger.info("SourcifyChains.Initialized", {
-  supportedChainsCount: supportedChainsArray.length,
-  allChainsCount: sourcifyChainsArray.length,
-  supportedChains: supportedChainsArray.map((c) => c.chainId),
-  allChains: sourcifyChainsArray.map((c) => c.chainId),
-});
-
-// Gets the chainsMap, sorts the chains, returns SourcifyChain array.
-export function getSortedChainsArray(
-  chainMap: SourcifyChainMap
-): SourcifyChain[] {
-  const chainsArray = Object.values(chainMap);
-  // Have Ethereum chains on top.
-  const ethereumChainIds = [1, 17000, 5, 11155111, 3, 4];
-  const ethereumChains = [] as SourcifyChain[];
-  ethereumChainIds.forEach((id) => {
-    // Ethereum chains might not be in a custom chains.json
-    if (chainMap[id] === undefined) {
-      return;
-    }
-    // Use long form name for Ethereum netorks e.g. "Ethereum Testnet Goerli" instead of "Goerli"
-    chainMap[id].name = chainMap[id].title || chainMap[id].name;
-    ethereumChains.push(chainMap[id]);
-  });
-  // Others, sorted by chainId strings
-  const otherChains = chainsArray
-    .filter((chain) => !ethereumChainIds.includes(chain.chainId))
-    .sort((a, b) =>
-      a.chainId.toString() > b.chainId.toString()
-        ? 1
-        : a.chainId.toString() < b.chainId.toString()
-        ? -1
-        : 0
-    );
-
-  const sortedChains = ethereumChains.concat(otherChains);
-  return sortedChains;
-}
-
-/**
- * To check if a chain is supported for verification.
- * Note that there might be chains not supported for verification anymore but still exist as a SourcifyChain e.g. Ropsten.
- */
-export function checkSupportedChainId(chainId: string) {
-  if (!(chainId in sourcifyChainsMap && sourcifyChainsMap[chainId].supported)) {
-    throw new ValidationError(
-      `Chain ${chainId} not supported for verification!`
-    );
-  }
-
-  return true;
-}
-
-/**
- * To check if a chain exists as a SourcifyChain.
- * Note that there might be chains not supported for verification anymore but still exist as a SourcifyChain e.g. Ropsten.
- */
-export function checkSourcifyChainId(chainId: string) {
-  if (
-    !(chainId in sourcifyChainsMap && sourcifyChainsMap[chainId]) &&
-    chainId != "0"
-  ) {
-    throw new Error(`Chain ${chainId} is not a Sourcify chain!`);
-  }
-
-  return true;
-}
-
-export {
-  sourcifyChainsMap,
-  sourcifyChainsArray,
-  supportedChainsMap,
-  supportedChainsArray,
-  LOCAL_CHAINS,
-};
+export { sourcifyChainsMap };

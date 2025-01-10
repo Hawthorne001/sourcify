@@ -330,30 +330,6 @@
       "expectedStatus": "perfect"
     }
   ],
-  "2358": [
-    {
-      "address": "0xa1CBa9Fe0b212237D96f6a3DA49949990c27919c",
-      "type": "single",
-      "expectedStatus": "partial"
-    },
-    {
-      "address": "0x6fE4439Ae7F93e4aa7989a057109d36Fbcd98bA9",
-      "type": "standard-json",
-      "expectedStatus": "perfect"
-    }
-  ],
-  "255": [
-    {
-      "address": "0x88A7cEF051B427B75cB473715B550E56E958992e",
-      "type": "single",
-      "expectedStatus": "partial"
-    },
-    {
-      "address": "0xC4782aDc7D2836fa23542E9E79391580E958500e",
-      "type": "standard-json",
-      "expectedStatus": "perfect"
-    }
-  ],
   "534351": [
     {
       "address": "0xFc2bfE03d07eC96F62D6F209667A660e4BF65D74",
@@ -456,6 +432,76 @@
     },
     {
       "address": "0x76B6a0F36CC71d49792eC1740892E8bc9AA7814c",
+      "type": "standard-json",
+      "expectedStatus": "perfect"
+    }
+  ],
+  "84532": [
+    {
+      "address": "0xeff2A458E464b07088bDB441C21A42AB4b61e07E",
+      "type": "single",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0xF873413AA072BFcdD97e81f74B190FFFB9110f42",
+      "type": "standard-json",
+      "expectedStatus": "perfect"
+    }
+  ],
+  "59144": [
+    {
+      "address": "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f",
+      "type": "single",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0xc808BfCBeD34D90fa9579CAa664e67B9A03C56ca",
+      "type": "standard-json",
+      "expectedStatus": "perfect"
+    }
+  ],
+  "59141": [
+    {
+      "address": "0x06565ed324Ee9fb4DB0FF80B7eDbE4Cb007555a3",
+      "type": "single",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0x9B1B4b0FD15eF697E2E61C29ee933b227C68dDb2",
+      "type": "standard-json",
+      "expectedStatus": "perfect"
+    }
+  ],
+  "2442": [
+    {
+      "address": "0x76de3276bd6adda3f00a29d6dff8b8fdf570d230",
+      "type": "single",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0x010788D1A2bbd1135c38648e2F99bd6D6cF70625",
+      "type": "multiple",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0xd5a515CE2dF4C69aA809De5b9318a3D4452D86BE",
+      "type": "standard-json",
+      "expectedStatus": "partial"
+    }
+  ],
+  "42170": [
+    {
+      "address": "0x0571d3aF023Ea8eD2323758B80Dd0C8DAe2C94f4",
+      "type": "single",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0xa7016847E0285f15bf4449a2a260b379eB517100",
+      "type": "multiple",
+      "expectedStatus": "partial"
+    },
+    {
+      "address": "0xD779479d792Ab8E94f61d6b2682a877B2868A8AD",
       "type": "standard-json",
       "expectedStatus": "perfect"
     }

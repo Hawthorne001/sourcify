@@ -2,6 +2,118 @@
 
 All notable changes to this project will be documented in this file.
 
+## sourcify-server@2.5.0 - 2025-01-08
+
+- Add Vyper verification support
+- Remove lambda compiler
+- New chains:
+  - Happy Chain Testnet (216)
+  - Quantum Portal Network (26100)
+
+## sourcify-server@2.4.1 - 2024-12-11
+
+- Add S3StorageService to write contracts to S3/IPFS
+- Add proxy contract detection and resolution
+- Change auth type and connection to the Alliance DB
+- CORS options for local IPs
+- New chains:
+  - Ethereum Mekong Testnet (7078815900)
+  - Bitrock Mainnet (7171)
+  - Bitrock Testnet (7771)
+  - Story Odyssey (1516)
+  - Kaia Mainnet (8217) (renamed from Klaytn)
+  - Kaia Kairos Testnet (1001) (renamed from Klaytn)
+
+## sourcify-server@2.4.0 - 2024-10-29
+
+
+- Refactor database utils into class #1689
+- Add chains that have trace support in Quicknode with trace support
+- Change `AlchemyInfura` type RPCs to generic API key RPCs
+- Add `subdomain` env support for Quicknode RPCs
+- New chains
+  - Zircuit Mainnet (48900)
+  - Zircuit Testnet (48899)
+  - Metis Andromeda Mainnet (1088)
+  - Metis Sepolia Testnet (59902)
+- Turn Flare Mainnet back on
+
+## sourcify-server@2.3.0 - 2024-10-14
+
+- Incorporate the new DB schema with separate sources table
+- Reusable server module (#1637): It's possible to create server instances fully with `new Server()`.
+- Use server public url in getTree instead of repositoryV1 url (#1677)
+- Use source_hash instead of source_hash_keccak when finding sources (#1671)
+- Remove .sol extension in repositoryV2 (#1648)
+- New chains:
+  - Polygon zkEVM Cardona Testnet (2442)
+  - B2 Mainnet (223)
+  - OORT Mainnet (970)
+  - TixChain Testnet (723107)
+ 
+
+
+## sourcify-server@2.2.1 - 2024-09-17
+
+- Check Blockscout first instead of Etherscan for creatorTxHash'es
+- Fix passing invalid addresses in url crashing server
+- Fix saving the contract when there's an improved match
+- Added chains:
+  - Curtis Testnet (3311)
+
+## sourcify-server@2.2.0 - 2024-08-29
+
+- Add IPFS Gateway Headers env var
+- Change requestId to traceID and make it compatible for GCP with W3C standard "traceparent" headers
+- Remove duplicate ValidationError in favor of BadRequestError
+- Add ConflictError for when a contract is already partially verified and the verification yields partial again (HTTP 409)
+- Add `verifyDeprecated` endpoint for syncing/migration
+- Change the default Storage backend to the SourcifyDatabase
+- Change config for the GCP setup e.g. turn off lambda compiler
+- Don't update repository tag on every new verification.
+- New chains:
+  - Telcoin Network (2017)
+- Deprecated chains:
+  - Mind Smart Chain Testnet (9977)
+  - Gather Mainnet (192837465)
+  - Rikeza Network (1433)
+  - Taraxa Testnet (842)
+- Clean up tests to re-use duplicate sources in chain tests
+
+## sourcify-server@2.1.0 - 2024-07-25
+
+- Update dependencies
+- Refactor tests and use TS in tests
+- Allow choosing the storage backends in config: SourcifyDatabase, AllianceDatabase, repoV1, repoV2
+- Adjust changes in the VerA DB: #1479 #1478 #1476 #1472
+- Convert FQNs of libraries from the SourcifyDB Transformations to legacy placeholder format when serving "library.json" files #1487
+- Add VerificationService.init() and an option in config to download all compilers in boot
+- Upgrade to Node v22
+- Store metadata in database
+- Fix bytecode hash calculation #1414
+- New chains:
+  - Mante Sepolia Testnet (5003) with Etherscan support
+  - Aura Xstaxy Mainnet (6322)
+  - HOME Verse Mainnet (19011)
+  - Lamina1 (10849)
+  - Lamina1 Identity (10850)
+  - Lamina1 Testnet (764984)
+  - Lamina1 Identity Testnet (767368)
+  - VeChain Mainnet (100009)
+  - VeChain Testnet (100010)
+  - Base Sepolia Tesnet (84532) with Etherscan support
+  - Linea Mainnet (59144) with Etherscan support
+  - Linea Sepolia (59141) with Etherscan support
+  - Taraxa Mainnet (841)
+  - PLYR PHI (16180)
+  - PLYR TAU Testnet (62831)
+  - Taraxa Testnet (842)
+  - Incentiv Devnet (16350)
+- Updated chains:
+  - Add Alchemy fallback to Holesky (17000)
+  - Add fetchContractCreationTx API for Oasis Emerald (42262), Emerald Testnet (42261), Sapphire (23294), and Sapphire Testnet (23295)
+  - Add Etherscan support to Mantle Mainnet (5000)
+
 ## sourcify-server@2.0.0 - 2024-05-28
 
 - Use Sourcify Database as source of truth #1328, from now on existance of verified contracts will be checked from the Sourcify PostgreSQL database and not filesystem based RepositoryV1

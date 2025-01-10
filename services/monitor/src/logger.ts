@@ -33,6 +33,22 @@ const loggerInstance: Logger = createLogger({
     (process.env.NODE_ENV === "production" ? "info" : "debug"),
 });
 
+const errorFormatter = format((info) => {
+  if (info.error instanceof Error) {
+    // Convert the error object to a plain object
+    // Including standard error properties and any custom ones
+    info.error = Object.assign(
+      {
+        message: info.error.message,
+        stack: info.error.stack,
+        name: info.error.name,
+      },
+      info.error,
+    );
+  }
+  return info;
+});
+
 // 2024-03-06T17:04:16.375Z [warn]: [Monitor] [ChainMonitor #1115511] Storing contract address=0x5FbDB2315678afecb367f032d93F642f64180aa3, chainId=1337, matchQuality=0.5
 const rawlineFormat = format.printf(
   ({ level, message, timestamp, service, moduleName, ...metadata }: any) => {
@@ -43,11 +59,7 @@ const rawlineFormat = format.printf(
       msg += " - ";
       const metadataMsg = Object.entries(metadata)
         .map(([key, value]) => {
-          if (value instanceof Error) {
-            // JSON.stringify will give a "{}" on Error objects becuase message and stack properties are non-enumberable.
-            // Instead do it manually
-            value = JSON.stringify(value, Object.getOwnPropertyNames(value));
-          } else if (typeof value === "object") {
+          if (typeof value === "object") {
             try {
               value = JSON.stringify(value);
             } catch (e) {
@@ -60,16 +72,60 @@ const rawlineFormat = format.printf(
       msg += chalk.grey(metadataMsg);
     }
     return msg;
-  }
+  },
 );
 
+// Choose between the GCP and the standard JSON format.
+const chooseJSONFormat = () => {
+  const isOnGCP = process.env.K_SERVICE || process.env.GOOGLE_CLOUD_PROJECT;
+
+  const gcpFormat = format.printf(
+    ({ level, message, timestamp, service, traceId, ...metadata }) => {
+      // Google Cloud uses a different field for indicating severity. Map `level` to `severity`
+      const severityMap: { [key: string]: string } = {
+        error: "ERROR",
+        warn: "WARNING",
+        info: "INFO",
+        debug: "DEBUG",
+        silly: "DEBUG", // GCP does not have an equivalent to 'silly', so map to 'DEBUG'
+      };
+
+      const severity = severityMap[level] || "DEFAULT";
+
+      const projectId =
+        process.env.GOOGLE_CLOUD_PROJECT ||
+        process.env.GCP_PROJECT ||
+        process.env.GCLOUD_PROJECT ||
+        "sourcify-project";
+
+      const logObject = {
+        severity,
+        message,
+        service,
+        timestamp,
+        // Add the trace under this field to allow easy correction of traces https://cloud.google.com/run/docs/logging#correlate-logs
+        "logging.googleapis.com/trace": `projects/${projectId}/traces/${traceId}`,
+        ...metadata,
+      };
+
+      return JSON.stringify(logObject);
+    },
+  );
+
+  return format.combine(
+    errorFormatter(),
+    format.timestamp(),
+    isOnGCP ? gcpFormat : format.json(),
+  );
+};
+
+const jsonFormat = chooseJSONFormat();
 const lineFormat = format.combine(
+  errorFormatter(),
   format.timestamp(),
   format.colorize(),
-  rawlineFormat
+  rawlineFormat,
 );
-
-const jsonFormat = format.combine(format.timestamp(), format.json());
 
 const consoleTransport = new transports.Console({
   // NODE_LOG_LEVEL is takes precedence, otherwise use "info" if in production, "debug" otherwise
@@ -106,8 +162,8 @@ export function setLogLevel(level: string): void {
   if (!validLogLevels.includes(level)) {
     throw new Error(
       `Invalid log level: ${level}. level can take: ${validLogLevels.join(
-        ", "
-      )}`
+        ", ",
+      )}`,
     );
   }
   console.warn(`Setting log level to: ${level}`);

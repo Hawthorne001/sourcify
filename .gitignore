@@ -3,10 +3,8 @@
 db/
 node_modules/
 mockRepository*
+test-s3/
 server.log
-ui/node_modules/
-ui/dist/
-ui/.cache/
 source-verify.dab
 dist/
 **/.env
@@ -23,3 +21,9 @@ logs
 chain-tests-report/
 coverage
 workspace/
+.nx/workspace-data
+.nx/cache
+.nx/installation
+
+# Ignore the server local config file. See .nxignore
+**/config/local.js

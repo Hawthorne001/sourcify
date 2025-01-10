@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## @ethereum-sourcify/lib-sourcify@1.11.0 - 2025-01-08
+
+- Add Vyper verification support
+- Update dependencies
+
+## @ethereum-sourcify/lib-sourcify@1.10.1 - 2024-12-11
+
+- Add SourcifyChain.getStorageAt 
+- Update dependencies
+
+## @ethereum-sourcify/lib-sourcify@1.10.0 - 2024-10-29
+
+- Add RPCs with trace support in SourcifyChains
+- Add support for getting the tx traces from `trace_transaction` and `debug_traceTransaction` type traces.
+- Update packages
+
+## @ethereum-sourcify/lib-sourcify@1.9.3 - 2024-10-14
+
+- Add routescan for creatorTx fetching and types
+- Update packages
+
+## @ethereum-sourcify/lib-sourcify@1.9.2 - 2024-09-17
+
+- Fix wrong bytecode comparison on creation bytecode matching, use .startsWith() instead
+- Fix the check for already existing partial match
+- Added test for above cases
+
+## @ethereum-sourcify/lib-sourcify@1.9.1 - 2024-08-29
+
+- Add custom headers for the IPFS Gateway
+- Fix passing the runtimeMatch when matching with the creation bytecode
+- Add logs
+- Update packages
+
+## @ethereum-sourcify/lib-sourcify@1.9.0 - 2024-07-25
+
+- Update dependencies
+- Fix saving the user input metadata.json instead of the compiler's output metadata.json
+- Use linkReferences to find and parse linked libraries in the bytecode instead of the placeholder. Also save fully qualified lib names in the transformations instead of placeholders.
+- Change Transformation names to be consistent with Transformations and TransormationValues
+
 ## @ethereum-sourcify/lib-sourcify@1.8.0 - 2024-05-14
 
 - Support for verification with double metadata hash (auxdata)

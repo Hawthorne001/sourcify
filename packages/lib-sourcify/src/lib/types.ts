@@ -1,5 +1,6 @@
 import { Abi } from 'abitype';
 import SourcifyChain from './SourcifyChain';
+import { FetchRequest } from 'ethers';
 export interface PathBuffer {
   path: string;
   buffer: Buffer;
@@ -106,7 +107,7 @@ export interface Metadata {
     compilationTarget: {
       [sourceName: string]: string;
     };
-    evmVersion: string;
+    evmVersion?: string;
     libraries?: {
       [index: string]: string;
     };
@@ -153,21 +154,35 @@ export interface ImmutableReferences {
     start: number;
   }>;
 }
+
+export interface LinkReferences {
+  [filePath: string]: {
+    [libraryName: string]: [
+      {
+        length: number;
+        start: number;
+      },
+    ];
+  };
+}
+
 export interface RecompilationResult {
   creationBytecode: string;
   runtimeBytecode: string;
   metadata: string;
   immutableReferences: ImmutableReferences;
+  creationLinkReferences: LinkReferences;
+  runtimeLinkReferences: LinkReferences;
 }
 
 export type Transformation = {
   type: 'insert' | 'replace';
   reason:
-    | 'constructor'
+    | 'constructorArguments'
     | 'library'
     | 'immutable'
-    | 'auxdata'
-    | 'call-protection';
+    | 'cborAuxdata'
+    | 'callProtection';
   offset: number;
   id?: string;
 };
@@ -175,30 +190,30 @@ export type Transformation = {
 // Call protection is always at the start of the runtime bytecode
 export const CallProtectionTransformation = (): Transformation => ({
   type: 'replace',
-  reason: 'call-protection',
-  offset: 0,
+  reason: 'callProtection',
+  offset: 1, // 1 byte is always the PUSH20 opcode 0x73
 });
 
 // TransformationValues only has one ConstructorTransformatino so no id field is needed
 export const ConstructorTransformation = (offset: number): Transformation => ({
   type: 'insert',
-  reason: 'constructor',
+  reason: 'constructorArguments',
   offset,
 });
 
 export const AuxdataTransformation = (
   offset: number,
-  id: string
+  id: string,
 ): Transformation => ({
   type: 'replace',
-  reason: 'auxdata',
+  reason: 'cborAuxdata',
   offset,
   id,
 });
 
 export const LibraryTransformation = (
   offset: number,
-  id: string
+  id: string,
 ): Transformation => ({
   type: 'replace',
   reason: 'library',
@@ -208,9 +223,10 @@ export const LibraryTransformation = (
 
 export const ImmutablesTransformation = (
   offset: number,
-  id: string
+  id: string,
+  type: 'replace' | 'insert',
 ): Transformation => ({
-  type: 'replace',
+  type,
   reason: 'immutable',
   offset,
   id,
@@ -248,9 +264,10 @@ export interface Match {
   creationTransformationValues?: TransformationValues;
   onchainRuntimeBytecode?: string;
   onchainCreationBytecode?: string;
-  blockNumber?: number | null;
+  blockNumber?: number;
   txIndex?: number;
   deployer?: string;
+  contractName?: string;
 }
 
 export type Status =
@@ -281,6 +298,9 @@ export interface FetchContractCreationTxMethods {
     url: string;
     blockscoutPrefix?: string;
   };
+  routescanApi?: {
+    type: 'mainnet' | 'testnet';
+  };
   etherscanApi?: boolean;
   etherscanScrape?: {
     url: string;
@@ -295,18 +315,43 @@ export interface FetchContractCreationTxMethods {
     url: string;
   };
   avalancheApi?: boolean;
+  nexusApi?: {
+    url: string;
+    runtime: string;
+  };
 }
 
-export type AlchemyInfuraRPC = {
-  type: 'Alchemy' | 'Infura';
+// types of the keys of FetchContractCreationTxMethods
+export type FetchContractCreationTxMethod =
+  keyof FetchContractCreationTxMethods;
+
+export type TraceSupport = 'trace_transaction' | 'debug_traceTransaction';
+
+export type BaseRPC = {
   url: string;
-  apiKeyEnvName: string;
+  type: 'BaseRPC';
+  traceSupport?: TraceSupport;
 };
 
-export type FetchRequestRPC = {
+// override the type of BaseRPC to add the type field
+export type APIKeyRPC = Omit<BaseRPC, 'type'> & {
+  type: 'APIKeyRPC';
+  apiKeyEnvName: string;
+  subDomainEnvName?: string;
+};
+
+// override the type of BaseRPC to add the type field
+export type FetchRequestRPC = Omit<BaseRPC, 'type'> & {
   type: 'FetchRequest';
-  url: string;
-  headers?: Array<{ headerName: string; headerEnvName: string }>;
+  headers?: Array<{
+    headerName: string;
+    headerEnvName: string;
+  }>;
+};
+
+export type TraceSupportedRPC = {
+  type: TraceSupport;
+  index: number;
 };
 
 export type SourcifyChainExtension = {
@@ -317,7 +362,12 @@ export type SourcifyChainExtension = {
     apiKeyEnvName?: string;
   };
   fetchContractCreationTxUsing?: FetchContractCreationTxMethods;
-  rpc?: Array<string | AlchemyInfuraRPC | FetchRequestRPC>;
+  rpc?: Array<string | BaseRPC | APIKeyRPC | FetchRequestRPC>;
+};
+
+export type RPCObjectWithTraceSupport = {
+  rpc: string | FetchRequest;
+  traceSupport?: TraceSupport;
 };
 
 export interface SourcifyChainsExtensionsObject {
@@ -354,7 +404,7 @@ interface File {
   content?: string;
 }
 
-interface Sources {
+export interface Sources {
   [key: string]: File;
 }
 
@@ -444,7 +494,7 @@ export interface JsonInput {
   sources: Sources;
   settings?: Settings;
 }
-interface CompilerOutputError {
+interface SolidityOutputError {
   sourceLocation?: {
     file: string;
     start: number;
@@ -456,7 +506,7 @@ interface CompilerOutputError {
   message: string;
   formattedMessage?: string;
 }
-interface CompilerOutputEvmBytecode {
+interface SolidityOutputEvmBytecode {
   object: string;
   opcodes?: string;
   sourceMap?: string;
@@ -469,61 +519,79 @@ interface CompilerOutputEvmBytecode {
       };
 }
 
-interface CompilerOutputEvmDeployedBytecode extends CompilerOutputEvmBytecode {
+interface SolidityOutputEvmDeployedBytecode extends SolidityOutputEvmBytecode {
   immutableReferences?: ImmutableReferences;
 }
-interface CompilerOutputSources {
+export interface SolidityOutputSources {
   [globalName: string]: {
     id: number;
     ast: any;
     legacyAST: any;
   };
 }
-interface CompilerOutputContracts {
-  [globalName: string]: {
-    [contractName: string]: {
-      abi: Abi;
-      metadata: string;
-      userdoc?: any;
-      devdoc?: any;
-      ir?: string;
-      irAst?: any;
-      irOptimized?: string;
-      irOptimizedAst?: any;
-      storageLayout?: any;
-      evm: {
-        assembly?: string;
-        legacyAssembly?: any;
-        bytecode: CompilerOutputEvmBytecode;
-        deployedBytecode?: CompilerOutputEvmDeployedBytecode;
-        methodIdentifiers?: {
-          [methodName: string]: string;
-        };
-        gasEstimates?: {
-          creation: {
-            codeDepositCost: string;
-            executionCost: string;
-            totalCost: string;
-          };
-          external: {
-            [functionSignature: string]: string;
-          };
-          internal: {
-            [functionSignature: string]: string;
-          };
-        };
-      };
-      ewasm?: {
-        wast: string;
-        wasm: string;
-      };
+
+export interface StorageLayout {
+  storage: {
+    astId: number;
+    contract: string;
+    label: string;
+    offset: number;
+    slot: string;
+    type: string;
+  };
+  types: {
+    [index: string]: {
+      encoding: string;
+      label: string;
+      numberOfBytes: string;
     };
   };
 }
-export interface CompilerOutput {
-  errors?: CompilerOutputError[];
-  sources?: CompilerOutputSources;
-  contracts: CompilerOutputContracts;
+export interface SolidityOutputContract {
+  abi: Abi;
+  metadata: string;
+  userdoc?: any;
+  devdoc?: any;
+  ir?: string;
+  irAst?: any;
+  irOptimized?: string;
+  irOptimizedAst?: any;
+  storageLayout?: StorageLayout;
+  evm: {
+    assembly?: string;
+    legacyAssembly?: any;
+    bytecode: SolidityOutputEvmBytecode;
+    deployedBytecode?: SolidityOutputEvmDeployedBytecode;
+    methodIdentifiers?: {
+      [methodName: string]: string;
+    };
+    gasEstimates?: {
+      creation: {
+        codeDepositCost: string;
+        executionCost: string;
+        totalCost: string;
+      };
+      external: {
+        [functionSignature: string]: string;
+      };
+      internal: {
+        [functionSignature: string]: string;
+      };
+    };
+  };
+  ewasm?: {
+    wast: string;
+    wasm: string;
+  };
+}
+export interface SolidityOutput {
+  errors?: SolidityOutputError[];
+  sources?: SolidityOutputSources;
+  contracts: {
+    [globalName: string]: {
+      [contractName: string]: SolidityOutputContract;
+    };
+  };
 }
 
 export interface CompiledContractCborAuxdata {
@@ -537,4 +605,29 @@ export interface AuxdataDiff {
   real: string;
   diffStart: number;
   diff: string;
+}
+
+export interface IpfsGateway {
+  url: string;
+  headers?: HeadersInit;
+}
+
+// https://geth.ethereum.org/docs/developers/evm-tracing/built-in-tracers#call-tracer
+export interface CallFrame {
+  type: string;
+  from: string;
+  to: string;
+  value: string;
+  gas: string;
+  gasUsed: string;
+  input: string;
+  output: string;
+  error: string;
+  revertReason: string;
+  calls: CallFrame[];
+}
+
+export enum Language {
+  Solidity = 'Solidity',
+  Vyper = 'Vyper',
 }

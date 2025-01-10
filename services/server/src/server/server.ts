@@ -1,15 +1,8 @@
 import path from "path";
-// First env vars need to be loaded before config
-import dotenv from "dotenv";
-dotenv.config({ path: path.resolve(__dirname, "..", "..", ".env") });
-// Make sure config is relative to server.ts and not where the server is run from
-process.env["NODE_CONFIG_DIR"] = path.resolve(__dirname, "..", "config");
-import config from "config";
 import express, { Request } from "express";
 import cors from "cors";
 import util from "util";
 import * as OpenApiValidator from "express-openapi-validator";
-import swaggerUi from "swagger-ui-express";
 import yamljs from "yamljs";
 import { resolveRefs } from "json-refs";
 import { getAddress } from "ethers";
@@ -21,7 +14,6 @@ import {
   rateLimit,
 } from "express-rate-limit";
 import crypto from "crypto";
-import serveIndex from "serve-index";
 import { v4 as uuidv4 } from "uuid";
 import { asyncLocalStorage } from "../common/async-context";
 
@@ -29,44 +21,80 @@ import { asyncLocalStorage } from "../common/async-context";
 import logger from "../common/logger";
 import routes from "./routes";
 import genericErrorHandler from "../common/errors/GenericErrorHandler";
-import {
-  checkSourcifyChainId,
-  checkSupportedChainId,
-} from "../sourcify-chains";
-import {
-  validateAddresses,
-  validateSingleAddress,
-  validateSourcifyChainIds,
-} from "./common";
+import { validateAddresses, validateSingleAddress } from "./common";
 import { initDeprecatedRoutes } from "./deprecated.routes";
 import getSessionMiddleware from "./session";
+import { Services } from "./services/services";
+import { StorageServiceOptions } from "./services/StorageService";
+import { VerificationServiceOptions } from "./services/VerificationService";
+import {
+  ISolidityCompiler,
+  IVyperCompiler,
+  SourcifyChainMap,
+} from "@ethereum-sourcify/lib-sourcify";
+import { ChainRepository } from "../sourcify-chain-repository";
+import { SessionOptions } from "express-session";
+
+declare module "express-serve-static-core" {
+  interface Request {
+    services: Services;
+  }
+}
+
+export interface ServerOptions {
+  port: string | number;
+  maxFileSize: number;
+  rateLimit: {
+    enabled: boolean;
+    windowMs?: number;
+    max?: number;
+    whitelist?: string[];
+    hideIpInLogs?: boolean;
+  };
+  corsAllowedOrigins: string[];
+  chains: SourcifyChainMap;
+  solc: ISolidityCompiler;
+  vyper: IVyperCompiler;
+  verifyDeprecated: boolean;
+  sessionOptions: SessionOptions;
+  loggingToken?: string;
+}
 
 export class Server {
   app: express.Application;
-  repository: string = config.get("repositoryV1.path");
   port: string | number;
+  services: Services;
+  chainRepository: ChainRepository;
 
-  constructor(port?: string | number) {
-    // To print regexes in the logs
-    Object.defineProperty(RegExp.prototype, "toJSON", {
-      value: RegExp.prototype.toString,
-    });
-
-    logger.info("Starting server with config", {
-      config: JSON.stringify(config, null, 2),
-    });
-
-    this.port = port || config.get("server.port");
+  constructor(
+    options: ServerOptions,
+    verificationServiceOptions: VerificationServiceOptions,
+    storageServiceOptions: StorageServiceOptions,
+  ) {
+    this.port = options.port;
     logger.info("Server port set", { port: this.port });
     this.app = express();
 
+    this.chainRepository = new ChainRepository(options.chains);
+
+    this.services = new Services(
+      verificationServiceOptions,
+      storageServiceOptions,
+    );
+
+    this.app.set("chainRepository", this.chainRepository);
+    this.app.set("solc", options.solc);
+    this.app.set("vyper", options.vyper);
+    this.app.set("verifyDeprecated", options.verifyDeprecated);
+    this.app.set("services", this.services);
+
     this.app.use(
       bodyParser.urlencoded({
-        limit: config.get("server.maxFileSize"),
+        limit: options.maxFileSize,
         extended: true,
-      })
+      }),
     );
-    this.app.use(bodyParser.json({ limit: config.get("server.maxFileSize") }));
+    this.app.use(bodyParser.json({ limit: options.maxFileSize }));
 
     // Init deprecated routes before OpenApiValidator so that it can handle the request with the defined paths.
     // initDeprecatedRoutes is a middleware that replaces the deprecated paths with the real ones.
@@ -74,25 +102,33 @@ export class Server {
 
     this.app.use(
       fileUpload({
-        limits: { fileSize: config.get("server.maxFileSize") },
+        limits: { fileSize: options.maxFileSize },
         abortOnLimit: true,
-      })
+      }),
     );
 
-    // Inject the requestId to the AsyncLocalStorage to be logged.
+    // Inject the traceId to the AsyncLocalStorage to be logged.
     this.app.use((req, res, next) => {
-      // create a new id if it doesn't exist. Should be assigned by the nginx in production.
-      if (!req.headers["x-request-id"]) {
-        req.headers["x-request-id"] = uuidv4();
+      let traceId;
+      // GCP uses the standard `traceparent` header https://www.w3.org/TR/trace-context/
+      if (req.headers["traceparent"]) {
+        // Apparently req.headers can be an array
+        const traceparent = Array.isArray(req.headers["traceparent"])
+          ? req.headers["traceparent"][0]
+          : req.headers["traceparent"];
+        // traceparent format is: # {version}-{trace_id}-{span_id}-{trace_flags}
+        traceId = traceparent.split("-")[1];
+      } else if (req.headers["x-request-id"]) {
+        // continue supporting legacy `x-request-id`
+        traceId = Array.isArray(req.headers["x-request-id"])
+          ? req.headers["x-request-id"][0]
+          : req.headers["x-request-id"];
+      } else {
+        traceId = uuidv4();
       }
 
-      // Apparently req.headers can be an array
-      const requestId = Array.isArray(req.headers["x-request-id"])
-        ? req.headers["x-request-id"][0]
-        : req.headers["x-request-id"];
-
-      const context = { requestId };
-      // Run the rest of the request stack in the context of the requestId
+      const context = { traceId };
+      // Run the rest of the request stack in the context of the traceId
       asyncLocalStorage.run(context, () => {
         next();
       });
@@ -130,45 +166,45 @@ export class Server {
               // This is a placeholder token. In a real application, use a more secure method for managing and validating tokens.
               const token = authHeader && authHeader.split(" ")[1];
 
-              return token === process.env.SETLOGGING_TOKEN;
+              if (!options.loggingToken) {
+                return false;
+              }
+              return token === options.loggingToken;
             },
           },
         },
-        formats: [
-          {
-            name: "comma-separated-addresses",
+        formats: {
+          "comma-separated-addresses": {
             type: "string",
             validate: (addresses: string) => validateAddresses(addresses),
           },
-          {
-            name: "address",
+          address: {
             type: "string",
             validate: (address: string) => validateSingleAddress(address),
           },
-          {
-            name: "comma-separated-sourcify-chainIds",
+          "comma-separated-sourcify-chainIds": {
             type: "string",
-            validate: (chainIds: string) => validateSourcifyChainIds(chainIds),
+            validate: (chainIds: string) =>
+              this.chainRepository.validateSourcifyChainIds(chainIds),
           },
-          {
-            name: "supported-chainId",
+          "supported-chainId": {
             type: "string",
-            validate: (chainId: string) => checkSupportedChainId(chainId),
+            validate: (chainId: string) =>
+              this.chainRepository.checkSupportedChainId(chainId),
           },
-          {
-            // "Sourcify chainIds" include the chains that are revoked verification support, but can have contracts in the repo.
-            name: "sourcify-chainId",
+          // "Sourcify chainIds" include the chains that are revoked verification support, but can have contracts in the repo.
+          "sourcify-chainId": {
             type: "string",
-            validate: (chainId: string) => checkSourcifyChainId(chainId),
+            validate: (chainId: string) =>
+              this.chainRepository.checkSourcifyChainId(chainId),
           },
-          {
-            name: "match-type",
+          "match-type": {
             type: "string",
             validate: (matchType: string) =>
               matchType === "full_match" || matchType === "partial_match",
           },
-        ],
-      })
+        },
+      }),
     );
     // checksum addresses in every request
     this.app.use((req: any, res: any, next: any) => {
@@ -188,16 +224,14 @@ export class Server {
           .map((address: string) => getAddress(address))
           .join(",");
       }
-      if (req.params.address) {
-        req.params.address = getAddress(req.params.address);
-      }
       next();
     });
 
-    if (config.get("rateLimit.enabled")) {
+    if (options.rateLimit.enabled) {
+      const hideIpInLogs = options.rateLimit.hideIpInLogs;
       const limiter = rateLimit({
-        windowMs: config.get("rateLimit.windowMs"),
-        max: config.get("rateLimit.max"),
+        windowMs: options.rateLimit.windowMs,
+        max: options.rateLimit.max,
         standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
         legacyHeaders: false, // Disable the `X-RateLimit-*` headers
         message: {
@@ -207,7 +241,7 @@ export class Server {
         handler: (req, res, next, options) => {
           const ip = getIp(req);
           const ipHash = ip ? hash(ip) : "";
-          const ipLog = process.env.NODE_ENV === "production" ? ipHash : ip; // Don't log IPs in production master
+          const ipLog = hideIpInLogs ? ipHash : ip;
           const store = options.store as ExpressRateLimitMemoryStore;
           const hits = store.hits[ip || ""];
           logger.debug("Rate limit hit", {
@@ -223,7 +257,7 @@ export class Server {
         },
         skip: (req) => {
           const ip = getIp(req);
-          const whitelist = config.get("rateLimit.whitelist") as string[];
+          const whitelist = options.rateLimit.whitelist as string[];
           for (const ipPrefix of whitelist) {
             if (ip?.startsWith(ipPrefix)) return true;
           }
@@ -248,7 +282,7 @@ export class Server {
       // startsWith to match /session*
       if (sessionPaths.some((substr) => req.path.startsWith(substr))) {
         return cors({
-          origin: config.get("corsAllowedOrigins"),
+          origin: options.corsAllowedOrigins,
           credentials: true,
         })(req, res, next);
       }
@@ -264,7 +298,7 @@ export class Server {
     // for the case "X-Forwarded-For: 2.2.2.2, 192.168.1.5", we want 2.2.2.2 to be used
     this.app.set("trust proxy", true);
     // Enable session only for session endpoints
-    this.app.use("/*session*", getSessionMiddleware());
+    this.app.use("/*session*", getSessionMiddleware(options.sessionOptions));
 
     this.app.use("/", routes);
     this.app.use(genericErrorHandler);
@@ -294,31 +328,9 @@ export class Server {
       },
       function (err: any) {
         console.log(err.stack);
-      }
+      },
     );
   }
-}
-
-if (require.main === module) {
-  const server = new Server();
-  server
-    .loadSwagger(yamljs.load(path.join(__dirname, "..", "openapi.yaml"))) // load the openapi file with the $refs resolved
-    .then((swaggerDocument: any) => {
-      server.app.get("/api-docs/swagger.json", (req, res) =>
-        res.json(swaggerDocument)
-      );
-      server.app.use(
-        "/api-docs",
-        swaggerUi.serve,
-        swaggerUi.setup(swaggerDocument, {
-          customSiteTitle: "Sourcify API",
-          customfavIcon: "https://sourcify.dev/favicon.ico",
-        })
-      );
-      server.app.listen(server.port, () => {
-        logger.info("Server listening", { port: server.port });
-      });
-    });
 }
 
 function hash(data: string) {

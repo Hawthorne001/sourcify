@@ -10,17 +10,23 @@
 import path from 'path';
 import fs from 'fs';
 import {
-  CompilerOutput,
+  SolidityOutput,
   JsonInput,
   Match,
   SourcifyChain,
   verifyDeployed,
 } from '../src';
-import { checkFiles } from '../src';
+import { checkFilesWithMetadata } from '../src';
 import { expect } from 'chai';
 import { ContractFactory, Signer } from 'ethers';
 import { ISolidityCompiler } from '../src/lib/ISolidityCompiler';
-import { useCompiler } from './compiler/solidityCompiler';
+import { useSolidityCompiler } from './compiler/solidityCompiler';
+import { useVyperCompiler } from './compiler/vyperCompiler';
+import {
+  IVyperCompiler,
+  VyperJsonInput,
+  VyperOutput,
+} from '../src/lib/IVyperCompiler';
 /**
  *  Function to deploy contracts from provider unlocked accounts
  *  contractFolderPath must contain an artifact.json file with "abi" and "bytecode" fields
@@ -31,14 +37,14 @@ import { useCompiler } from './compiler/solidityCompiler';
 export async function deployFromAbiAndBytecode(
   signer: Signer,
   contractFolderPath: string,
-  constructorArgs?: any[]
+  constructorArgs?: any[],
 ) {
   const artifact = require(path.join(contractFolderPath, 'artifact.json'));
   // Deploy contract
   const contractFactory = new ContractFactory(
     artifact.abi,
     artifact.bytecode,
-    signer
+    signer,
   );
   const deployment = await contractFactory.deploy(...(constructorArgs || []));
   await deployment.waitForDeployment();
@@ -47,7 +53,7 @@ export async function deployFromAbiAndBytecode(
   const creationTx = deployment.deploymentTransaction();
   if (!creationTx) {
     throw new Error(
-      `No deployment transaction found for ${contractAddress} in contract folder ${contractFolderPath}`
+      `No deployment transaction found for ${contractAddress} in contract folder ${contractFolderPath}`,
     );
   }
   return { contractAddress, txHash: creationTx.hash };
@@ -57,13 +63,28 @@ class Solc implements ISolidityCompiler {
   async compile(
     version: string,
     solcJsonInput: JsonInput,
-    forceEmscripten: boolean = false
-  ): Promise<CompilerOutput> {
-    return await useCompiler(version, solcJsonInput, forceEmscripten);
+    forceEmscripten: boolean = false,
+  ): Promise<SolidityOutput> {
+    return await useSolidityCompiler(version, solcJsonInput, forceEmscripten);
   }
 }
 
 export const solc = new Solc();
+
+class VyperCompiler implements IVyperCompiler {
+  async compile(
+    version: string,
+    solcJsonInput: VyperJsonInput,
+  ): Promise<VyperOutput> {
+    return await useVyperCompiler(
+      path.join('/tmp', 'vyper-repo'),
+      version,
+      solcJsonInput,
+    );
+  }
+}
+
+export const vyperCompiler = new VyperCompiler();
 
 /**
  * Checks the contract from metadata and source files under contractFolderPath and
@@ -74,17 +95,16 @@ export const checkAndVerifyDeployed = async (
   contractFolderPath: string,
   sourcifyChain: SourcifyChain,
   address: string,
-  creatorTxHash?: string
+  creatorTxHash?: string,
 ) => {
-  const checkedContracts = await checkFilesFromContractFolder(
-    contractFolderPath
-  );
+  const checkedContracts =
+    await checkFilesWithMetadataFromContractFolder(contractFolderPath);
 
   const match = await verifyDeployed(
     checkedContracts[0],
     sourcifyChain,
     address,
-    creatorTxHash
+    creatorTxHash,
   );
   return match;
 };
@@ -93,23 +113,29 @@ export const checkAndVerifyDeployed = async (
  * Creates a CheckedContract[] from the files under contractFolderPath.
  * The metadata must be at contractFolderPath/metadata.json and the sources must be under contractFolderPath/sources.
  */
-export const checkFilesFromContractFolder = async (
-  contractFolderPath: string
+export const checkFilesWithMetadataFromContractFolder = async (
+  contractFolderPath: string,
 ) => {
   const metadataPath = path.join(contractFolderPath, 'metadata.json');
   const metadataBuffer = fs.readFileSync(metadataPath);
   const metadataPathBuffer = { path: metadataPath, buffer: metadataBuffer };
 
-  const sourceFilePaths = fs.readdirSync(
-    path.join(contractFolderPath, 'sources')
-  );
-  const sourcePathBuffers = sourceFilePaths.map((sourceFilePath) => {
-    const sourceBuffer = fs.readFileSync(
-      path.join(contractFolderPath, 'sources', sourceFilePath)
-    );
-    return { path: sourceFilePath, buffer: sourceBuffer };
-  });
-  const checkedContracts = await checkFiles(solc, [
+  const sourcePathBuffers: { path: string; buffer: Buffer }[] = [];
+  const traverseDirectory = (dirPath: string, basePath: string = '') => {
+    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dirPath, entry.name);
+      const relativePath = path.join(basePath, entry.name);
+      if (entry.isDirectory()) {
+        traverseDirectory(fullPath, relativePath);
+      } else {
+        const sourceBuffer = fs.readFileSync(fullPath);
+        sourcePathBuffers.push({ path: relativePath, buffer: sourceBuffer });
+      }
+    }
+  };
+  traverseDirectory(path.join(contractFolderPath, 'sources'));
+  const checkedContracts = await checkFilesWithMetadata(solc, vyperCompiler, [
     metadataPathBuffer,
     ...sourcePathBuffers,
   ]);
@@ -123,17 +149,17 @@ export const deployCheckAndVerify = async (
   contractFolderPath: string,
   sourcifyChain: SourcifyChain,
   signer: Signer,
-  args?: any[]
+  args?: any[],
 ) => {
   const { contractAddress } = await deployFromAbiAndBytecode(
     signer,
     contractFolderPath,
-    args
+    args,
   );
   const match = await checkAndVerifyDeployed(
     contractFolderPath,
     sourcifyChain,
-    contractAddress
+    contractAddress,
   );
   return { match, contractAddress };
 };
@@ -143,7 +169,7 @@ export const expectMatch = (
   status: string | null,
   address: string,
   libraryMap?: { [key: string]: string },
-  message?: string
+  message?: string,
 ) => {
   try {
     expect(match.runtimeMatch).to.equal(status);

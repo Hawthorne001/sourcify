@@ -42,18 +42,36 @@ The structure of the file is as such:
   decentralizedStorages: {
     ipfs: {
       enabled: true,
-      gateways: ["https://ipfs.io/ipfs/", "http://localhost:8080/ipfs/"],
+      gateways: [
+        // Passing gateway as a string will use default settings
+        "https://ipfs.io/ipfs/",
+        // If you need gateways specific settings you can pass them in an object
+        {
+          url: "http://localhost:8080/ipfs/",
+          headers: {
+            "Authentication": "xxx"
+          }
+        }
+      ],
       // Time when the request to the gateway will timeout i.e. canceled in ms
       timeout: 30000,
       // Time between each request to the gateway in ms
       interval: 5000,
       // Number of retries before giving up
       retries: 5,
+      // (optional) Headers passed to the fetch headers parameter
+      headers: {}
     },
     // can also have swarm
   },
   // Sourcify instances to verify the contracts on. Can be multiple
   sourcifyServerURLs: ["https://sourcify.dev/server/", "http://localhost:5555/"],
+  sourcifyRequestOptions: {
+    // Maximum number of retry attempts for contract verification requests after encountering an error
+    maxRetries: 3,
+    // Delay in milliseconds between each retry attempt for verification requests to Sourcify
+    retryDelay: 30000,
+  },
   defaultChainConfig: {
     // Block to start monitoring from. If undefined, it will start from the latest block by asking the RPC `eth_blockNumber`
     startBlock: undefined,
@@ -128,6 +146,12 @@ node dist/index.js --chainsPath /path/to/your-chains.json --configPath /path/to/
 The `--chainsPath` and `--configPath` are optional. If not provided, the default paths will be used.
 
 ### 2. Run via Docker
+
+If you want to build yourself, the builds need to be run from the project root context, e.g.:
+
+```bash
+cd sourcify/ && docker build -f services/server/Dockerfile .
+```
 
 The containers are published in the [Github Container Registry](https://github.com/ethereum/sourcify/pkgs/container/sourcify%2Fmonitor)
 

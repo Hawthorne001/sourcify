@@ -1,15 +1,15 @@
 import {
+  AbstractCheckedContract,
   checkPaths,
   extractHardhatMetadataAndSources,
   pathContentArrayToStringMap,
   unzipFiles,
 } from '../src';
 import path from 'path';
-import { CheckedContract } from '../src';
 import fs from 'fs';
 import chai, { expect } from 'chai';
 import hardhatOutput from './validation/files/hardhat-output/output.json';
-import { solc } from './utils';
+import { solc, vyperCompiler } from './utils';
 
 function objectLength(obj: any) {
   return Object.keys(obj).length;
@@ -24,7 +24,12 @@ describe('ValidationService', function () {
     it('should succeed for single source file', async function () {
       const ignoring: string[] = [];
       const paths = [path.join(__dirname, 'validation', 'files', 'single')];
-      const checkedContracts = await checkPaths(solc, paths, ignoring);
+      const checkedContracts = await checkPaths(
+        solc,
+        vyperCompiler,
+        paths,
+        ignoring,
+      );
 
       chai.expect(ignoring).to.be.empty;
       expectationsOfSingle(checkedContracts);
@@ -36,23 +41,28 @@ describe('ValidationService', function () {
         path.join(__dirname, 'validation', 'files', 'single', '1_Storage.sol'),
         path.join(__dirname, 'validation', 'files', 'single', 'metadata.json'),
       ];
-      const checkedContracts = await checkPaths(solc, paths, ignoring);
+      const checkedContracts = await checkPaths(
+        solc,
+        vyperCompiler,
+        paths,
+        ignoring,
+      );
 
       chai.expect(ignoring).to.be.empty;
       expectationsOfSingle(checkedContracts);
     });
 
-    function expectationsOfSingle(checkedContracts: CheckedContract[]) {
+    function expectationsOfSingle(checkedContracts: AbstractCheckedContract[]) {
       chai.expect(checkedContracts.length).to.equal(1);
       const onlyContract = checkedContracts[0];
 
       chai.expect(onlyContract.name).to.equal('Storage');
       chai.expect(onlyContract.compiledPath).to.equal('browser/1_Storage.sol');
 
-      chai.expect(CheckedContract.isValid(onlyContract)).to.be.true;
-      chai.expect(objectLength(onlyContract.solidity)).to.equal(1);
+      chai.expect(onlyContract.isValid()).to.be.true;
+      chai.expect(objectLength(onlyContract.sources)).to.equal(1);
       chai
-        .expect(onlyContract.solidity)
+        .expect(onlyContract.sources)
         .to.have.all.keys('browser/1_Storage.sol');
       chai.expect(onlyContract.missing).to.be.empty;
       chai.expect(onlyContract.invalid).to.be.empty;
@@ -63,7 +73,12 @@ describe('ValidationService', function () {
       const paths = [
         path.join(__dirname, 'validation', 'files', 'single', 'metadata.json'),
       ];
-      const checkedContracts = await checkPaths(solc, paths, ignoring);
+      const checkedContracts = await checkPaths(
+        solc,
+        vyperCompiler,
+        paths,
+        ignoring,
+      );
 
       chai.expect(ignoring).to.be.empty;
       chai.expect(checkedContracts.length).to.equal(1);
@@ -72,8 +87,8 @@ describe('ValidationService', function () {
       chai.expect(onlyContract.name).to.equal('Storage');
       chai.expect(onlyContract.compiledPath).to.equal('browser/1_Storage.sol');
 
-      chai.expect(CheckedContract.isValid(onlyContract)).to.be.false;
-      chai.expect(onlyContract.solidity).to.be.empty;
+      chai.expect(onlyContract.isValid()).to.be.false;
+      chai.expect(onlyContract.sources).to.be.empty;
       chai.expect(objectLength(onlyContract.missing)).to.equal(1);
       chai.expect(onlyContract.missing).to.have.key('browser/1_Storage.sol');
       chai.expect(onlyContract.invalid).to.be.empty;
@@ -85,7 +100,7 @@ describe('ValidationService', function () {
         path.join(__dirname, 'validation', 'files', 'single', '1_Storage.sol'),
       ];
       try {
-        await checkPaths(solc, paths);
+        await checkPaths(solc, vyperCompiler, paths);
       } catch (e) {
         if (e instanceof Error) error = e;
       }
@@ -101,13 +116,18 @@ describe('ValidationService', function () {
         __dirname,
         'validation',
         'files',
-        'foobar.sol'
+        'foobar.sol',
       );
       const paths = [
         path.join(__dirname, 'validation', 'files', 'single'),
         invalidPath,
       ];
-      const checkedContracts = await checkPaths(solc, paths, ignoring);
+      const checkedContracts = await checkPaths(
+        solc,
+        vyperCompiler,
+        paths,
+        ignoring,
+      );
 
       chai.expect(ignoring).to.deep.equal([invalidPath]);
       expectationsOfSingle(checkedContracts);
@@ -116,14 +136,14 @@ describe('ValidationService', function () {
     async function checkSingleWithModifiedEnding(
       directoryName: string,
       expectedLineEnd: string,
-      expectedFileEnd: string
+      expectedFileEnd: string,
     ) {
       const ignoring: string[] = [];
       const directory = path.join(
         __dirname,
         'validation',
         'files',
-        directoryName
+        directoryName,
       );
 
       const filePath = path.join(directory, '1_Storage.sol');
@@ -141,14 +161,19 @@ describe('ValidationService', function () {
       const fileEnd = content.slice(content.length - endLength);
       chai.expect(fileEnd).to.equal(expectedFileEnd);
 
-      const checkedContracts = await checkPaths(solc, [directory], ignoring);
+      const checkedContracts = await checkPaths(
+        solc,
+        vyperCompiler,
+        [directory],
+        ignoring,
+      );
 
       chai.expect(ignoring).to.be.empty;
       chai.expect(checkedContracts).to.have.a.lengthOf(1);
 
       const contract = checkedContracts[0];
       chai.expect(contract.name).to.equal('Storage');
-      chai.expect(CheckedContract.isValid(contract)).to.be.true;
+      chai.expect(contract.isValid()).to.be.true;
     }
 
     it('should replace \\r\\n with \\n', function () {
@@ -171,7 +196,7 @@ describe('ValidationService', function () {
       checkSingleWithModifiedEnding(
         'single-remove-trailing-rn',
         '\r\n',
-        '\r\n'
+        '\r\n',
       );
     });
 
@@ -202,7 +227,7 @@ describe('Unit tests', function () {
     const keysInStringMap = Object.keys(stringMap);
     expect(keysInStringMap).lengthOf(1);
     expect(keysInStringMap[0]).equals(
-      './validation/files/hardhat-output/output.json'
+      './validation/files/hardhat-output/output.json',
     );
   });
   it('Should unzip', async function () {
@@ -210,7 +235,24 @@ describe('Unit tests', function () {
       'test',
       'validation',
       'files',
-      'truffle-example.zip'
+      'truffle-example.zip',
+    );
+    const zippedTruffleBuffer = fs.readFileSync(zippedTrufflePath);
+    const files = [
+      {
+        path: zippedTrufflePath,
+        buffer: zippedTruffleBuffer,
+      },
+    ];
+    await unzipFiles(files);
+    expect(files).lengthOf(19);
+  });
+  it('Should unzip and exclude any __MACOSX folders', async function () {
+    const zippedTrufflePath = path.join(
+      'test',
+      'validation',
+      'files',
+      'truffle-example-with-macosx.zip',
     );
     const zippedTruffleBuffer = fs.readFileSync(zippedTrufflePath);
     const files = [

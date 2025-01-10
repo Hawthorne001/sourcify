@@ -1,14 +1,8 @@
 import { Logger } from "winston";
 import logger from "./logger";
-import nodeFetch from "node-fetch";
 import { TimeoutError } from "./util";
+import { GatewayFetcherConfig } from "./types";
 
-type GatewayFetcherConfig = {
-  url: string;
-  fetchTimeout: number;
-  fetchInterval: number;
-  fetchRetries: number;
-};
 export class GatewayFetcher {
   public url: string;
 
@@ -16,13 +10,15 @@ export class GatewayFetcher {
   private fetchInterval: number; // how much time to wait between two requests
   private retries: number; // how much time has to pass before a source is forgotten
   private gwLogger: Logger;
+  private headers?: HeadersInit;
 
   constructor(config: GatewayFetcherConfig) {
     this.url = config.url;
-    this.fetchTimeout = config.fetchTimeout;
-    this.fetchInterval = config.fetchInterval;
-    this.retries = config.fetchRetries;
+    this.fetchTimeout = config.timeout;
+    this.fetchInterval = config.interval;
+    this.retries = config.retries;
     this.gwLogger = logger.child({ moduleName: `GatewayFetcher ${this.url}` });
+    this.headers = config.headers;
   }
 
   fetchWithRetries = async (fileHash: string) => {
@@ -32,7 +28,7 @@ export class GatewayFetcher {
     let hitTimeout = false;
 
     for (let i = 0; i < this.retries; i++) {
-      this.gwLogger.info("Fetching attempt", {
+      this.gwLogger.debug("Fetching attempt", {
         attempt: i + 1,
         url: this.url,
         fileHash,
@@ -43,17 +39,19 @@ export class GatewayFetcher {
           () =>
             reject(
               new TimeoutError(
-                `Timeout fetching after ${this.fetchTimeout}ms at ${fetchURL}`
-              )
+                `Timeout fetching after ${this.fetchTimeout}ms at ${fetchURL}`,
+              ),
             ),
-          this.fetchTimeout
+          this.fetchTimeout,
         );
       });
 
       try {
         // Race with gateway timeout
         const response = await Promise.race([
-          nodeFetch(fetchURL),
+          fetch(fetchURL, {
+            headers: this.headers,
+          }),
           timeoutPromise,
         ]);
 
@@ -66,11 +64,11 @@ export class GatewayFetcher {
         } else {
           hitTimeout = false;
           throw new Error(
-            `Received a non-ok status code while fetching from ${fetchURL}: ${response.status} ${response.statusText}`
+            `Received a non-ok status code while fetching from ${fetchURL}: ${response.status} ${response.statusText}`,
           );
         }
-      } catch (err: any) {
-        if (err.timeout) {
+      } catch (error: any) {
+        if (error.timeout) {
           hitTimeout = true;
         } else {
           hitTimeout = false;
@@ -79,7 +77,7 @@ export class GatewayFetcher {
           fileHash,
           url: this.url,
           attempt: i + 1,
-          err,
+          error,
         });
       }
 
@@ -97,11 +95,11 @@ export class GatewayFetcher {
     // Finally after all retries
     if (hitTimeout) {
       throw new TimeoutError(
-        `Gateway timeout fetching ${fileHash} from ${this.url} after ${this.retries} attempts`
+        `Gateway timeout fetching ${fileHash} from ${this.url} after ${this.retries} attempts`,
       );
     }
     throw new Error(
-      `Failed to fetch ${fileHash} from ${this.url} after ${this.retries} attempts`
+      `Failed to fetch ${fileHash} from ${this.url} after ${this.retries} attempts`,
     );
   };
 }

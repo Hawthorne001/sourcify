@@ -1,4 +1,4 @@
-import { CheckedContract } from './CheckedContract';
+import { SolidityCheckedContract } from './SolidityCheckedContract';
 import { id as keccak256str } from 'ethers';
 import {
   InvalidSources,
@@ -13,6 +13,9 @@ import fs from 'fs';
 import Path from 'path';
 import { ISolidityCompiler } from './ISolidityCompiler';
 import { logDebug, logInfo } from './logger';
+import { IVyperCompiler } from './IVyperCompiler';
+import { AbstractCheckedContract } from './AbstractCheckedContract';
+import { VyperCheckedContract } from './VyperCheckedContract';
 
 /**
  * Regular expression matching metadata nested within another json.
@@ -38,8 +41,9 @@ const ENDING_VARIATORS = [
 
 export function checkPaths(
   solidityCompiler: ISolidityCompiler,
+  vyperCompiler: IVyperCompiler,
   paths: string[],
-  ignoring?: string[]
+  ignoring?: string[],
 ) {
   const files: PathBuffer[] = [];
   paths.forEach((path) => {
@@ -54,13 +58,13 @@ export function checkPaths(
     }
   });
 
-  return checkFiles(solidityCompiler, files);
+  return checkFilesWithMetadata(solidityCompiler, vyperCompiler, files);
 }
 
 // Pass all input source files to the CheckedContract, not just those stated in metadata.
 export async function useAllSources(
-  contract: CheckedContract,
-  files: PathBuffer[]
+  contract: SolidityCheckedContract,
+  files: PathBuffer[],
 ) {
   await unzipFiles(files);
   const parsedFiles = files.map((pathBuffer) => ({
@@ -69,22 +73,23 @@ export async function useAllSources(
   }));
   const { sourceFiles } = splitFiles(parsedFiles);
   const stringMapSourceFiles = pathContentArrayToStringMap(sourceFiles);
-  // Files at contract.solidity are already hash matched with the sources in metadata. Use them instead of the user input .sol files.
-  Object.assign(stringMapSourceFiles, contract.solidity);
-  const contractWithAllSources = new CheckedContract(
+  // Files at contract.sources are already hash matched with the sources in metadata. Use them instead of the user input .sol files.
+  Object.assign(stringMapSourceFiles, contract.sources);
+  const contractWithAllSources = new SolidityCheckedContract(
     contract.solidityCompiler,
     contract.metadata,
     stringMapSourceFiles,
     contract.missing,
-    contract.invalid
+    contract.invalid,
   );
   return contractWithAllSources;
 }
 
-export async function checkFiles(
+export async function checkFilesWithMetadata(
   solidityCompiler: ISolidityCompiler,
+  vyperCompiler: IVyperCompiler,
   files: PathBuffer[],
-  unused?: string[]
+  unused?: string[],
 ) {
   logInfo('Checking files', { numberOfFiles: files.length });
   await unzipFiles(files);
@@ -94,24 +99,53 @@ export async function checkFiles(
   }));
   const { metadataFiles, sourceFiles } = splitFiles(parsedFiles);
 
-  const checkedContracts: CheckedContract[] = [];
+  const checkedContracts: AbstractCheckedContract[] = [];
 
   const byHash = storeByHash(sourceFiles);
   const usedFiles: string[] = [];
 
   metadataFiles.forEach((metadata) => {
-    const { foundSources, missingSources, invalidSources, metadata2provided } =
-      rearrangeSources(metadata, byHash);
-    const currentUsedFiles = Object.values(metadata2provided);
-    usedFiles.push(...currentUsedFiles);
-    const checkedContract = new CheckedContract(
-      solidityCompiler,
-      metadata,
+    const {
       foundSources,
       missingSources,
-      invalidSources
-    );
-    checkedContracts.push(checkedContract);
+      invalidSources,
+      metadata2provided,
+      language,
+    } = rearrangeSources(metadata, byHash);
+    logDebug(`Checking contract`, {
+      language: language,
+      foundSourcesCount: Object.keys(foundSources).length,
+      missingSources: Object.keys(missingSources),
+      invalidSources: Object.keys(invalidSources),
+    });
+    if (language === 'Solidity') {
+      const currentUsedFiles = Object.values(metadata2provided);
+      usedFiles.push(...currentUsedFiles);
+      const checkedContract = new SolidityCheckedContract(
+        solidityCompiler,
+        metadata,
+        foundSources,
+        missingSources,
+        invalidSources,
+      );
+      checkedContracts.push(checkedContract);
+    } else if (language === 'Vyper') {
+      const compilationTarget = metadata.settings.compilationTarget;
+      const compiledPath = Object.keys(compilationTarget)[0];
+      const name = compilationTarget[compiledPath];
+      delete metadata.settings.compilationTarget;
+      const checkedContract = new VyperCheckedContract(
+        vyperCompiler,
+        metadata.compiler.version,
+        compiledPath,
+        name,
+        metadata.settings,
+        foundSources,
+      );
+      checkedContracts.push(checkedContract);
+    } else {
+      throw new Error('Unsupported language');
+    }
   });
 
   if (unused) {
@@ -180,6 +214,11 @@ async function unzip(zippedFile: PathBuffer) {
   try {
     await zip.loadAsync(zippedFile.buffer);
     for (const filePath in zip.files) {
+      // Exclude Mac specific files
+      if (filePath.includes('__MACOSX')) {
+        continue;
+      }
+
       const buffer = await zip.files[filePath].async('nodebuffer');
       unzipped.push({
         path: filePath,
@@ -310,7 +349,13 @@ function rearrangeSources(metadata: any, byHash: Map<string, PathContent>) {
     }
   }
 
-  return { foundSources, missingSources, invalidSources, metadata2provided };
+  return {
+    foundSources,
+    missingSources,
+    invalidSources,
+    metadata2provided,
+    language: metadata.language,
+  };
 }
 
 /**
@@ -369,7 +414,7 @@ function generateVariations(pathContent: PathContent): PathContent[] {
 function extractUnused(
   inputFiles: PathContent[],
   usedFiles: string[],
-  unused: string[]
+  unused: string[],
 ): void {
   const usedFilesSet = new Set(usedFiles);
   const tmpUnused = inputFiles
@@ -406,7 +451,7 @@ function extractMetadataFromString(file: string): any {
  */
 function isMetadata(obj: any): boolean {
   return (
-    obj?.language === 'Solidity' &&
+    (obj?.language === 'Vyper' || obj?.language === 'Solidity') &&
     !!obj?.settings?.compilationTarget &&
     !!obj?.version &&
     !!obj?.output?.abi &&
@@ -426,7 +471,7 @@ function isMetadata(obj: any): boolean {
 function traversePathRecursively(
   path: string,
   worker: (filePath: string) => void,
-  afterDirectory?: (filePath: string) => void
+  afterDirectory?: (filePath: string) => void,
 ) {
   if (!fs.existsSync(path)) {
     const msg = `Encountered a nonexistent path: ${path}`;
@@ -509,7 +554,7 @@ export function extractHardhatMetadataAndSources(hardhatFile: PathContent) {
     for (const contractName in contractsObject[path]) {
       if (contractsObject[path][contractName].metadata) {
         const metadataObj = extractMetadataFromString(
-          contractsObject[path][contractName].metadata
+          contractsObject[path][contractName].metadata,
         );
         hardhatMetadataFiles.push(metadataObj);
       }

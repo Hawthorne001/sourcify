@@ -31,13 +31,11 @@ const loggerInstance: Logger = createLogger({
 
 // 2024-03-06T17:04:16.375Z [warn]: [RepositoryV2Service] Storing contract address=0x5FbDB2315678afecb367f032d93F642f64180aa3, chainId=1337, matchQuality=0.5
 const rawlineFormat = format.printf(
-  ({ level, message, timestamp, service, requestId, ...metadata }: any) => {
-    const requestIdMsg = requestId
-      ? chalk.grey(`[requestId=${requestId}]`)
-      : "";
+  ({ level, message, timestamp, service, traceId, ...metadata }: any) => {
+    const traceIdMsg = traceId ? chalk.grey(`[traceId=${traceId}]`) : "";
 
     let msg = `${timestamp} [${level}] ${service ? service : ""} ${chalk.bold(
-      message
+      message,
     )}`;
     if (metadata && Object.keys(metadata).length > 0) {
       msg += " - ";
@@ -54,10 +52,10 @@ const rawlineFormat = format.printf(
         })
         .join(" | ");
       msg += chalk.grey(metadataMsg);
-      msg += requestIdMsg && " - " + requestIdMsg;
+      msg += traceIdMsg && " - " + traceIdMsg;
     }
     return msg;
-  }
+  },
 );
 
 // Error formatter, since error objects are non-enumerable and will return "{}"
@@ -71,31 +69,70 @@ const errorFormatter = format((info) => {
         stack: info.error.stack,
         name: info.error.name,
       },
-      info.error
+      info.error,
     );
   }
   return info;
 });
 
-// Inject the requestId into the log message
-const injectRequestId = format((info) => {
-  const requestId = asyncLocalStorage.getStore()?.requestId;
-  return requestId ? { ...info, requestId } : info;
+// Inject the traceId into the log message
+const injectTraceId = format((info) => {
+  const traceId = asyncLocalStorage.getStore()?.traceId;
+  return traceId ? { ...info, traceId } : info;
 });
 
+// Choose between the GCP and the standard JSON format.
+const chooseJSONFormat = () => {
+  const isOnGCP = process.env.K_SERVICE || process.env.GOOGLE_CLOUD_PROJECT;
+
+  const gcpFormat = format.printf(
+    ({ level, message, timestamp, service, traceId, ...metadata }) => {
+      // Google Cloud uses a different field for indicating severity. Map `level` to `severity`
+      const severityMap: { [key: string]: string } = {
+        error: "ERROR",
+        warn: "WARNING",
+        info: "INFO",
+        debug: "DEBUG",
+        silly: "DEBUG", // GCP does not have an equivalent to 'silly', so map to 'DEBUG'
+      };
+
+      const severity = severityMap[level] || "DEFAULT";
+
+      const projectId =
+        process.env.GOOGLE_CLOUD_PROJECT ||
+        process.env.GCP_PROJECT ||
+        process.env.GCLOUD_PROJECT ||
+        "sourcify-project";
+
+      const logObject = {
+        severity,
+        message,
+        service,
+        timestamp,
+        // Add the trace under this field to allow easy correction of traces https://cloud.google.com/run/docs/logging#correlate-logs
+        "logging.googleapis.com/trace": `projects/${projectId}/traces/${traceId}`,
+        ...metadata,
+      };
+
+      return JSON.stringify(logObject);
+    },
+  );
+
+  return format.combine(
+    errorFormatter(),
+    format.timestamp(),
+    injectTraceId(),
+    isOnGCP ? gcpFormat : format.json(),
+  );
+};
+
+const jsonFormat = chooseJSONFormat();
 const lineFormat = format.combine(
-  injectRequestId(),
+  injectTraceId(),
   errorFormatter(),
   format.timestamp(),
   format.colorize(),
-  rawlineFormat
-);
-
-const jsonFormat = format.combine(
-  errorFormatter(),
-  format.timestamp(),
-  injectRequestId(),
-  format.json()
+  rawlineFormat,
 );
 
 const consoleTransport = new transports.Console({
@@ -135,8 +172,8 @@ export function setLogLevel(level: string): void {
   if (!validLogLevels.includes(level)) {
     throw new Error(
       `Invalid log level: ${level}. level can take: ${validLogLevels.join(
-        ", "
-      )}`
+        ", ",
+      )}`,
     );
   }
   console.warn(`Setting log level to: ${level}`);
