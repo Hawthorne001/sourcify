@@ -15,7 +15,7 @@ RUN npx lerna run build --scope sourcify-server
 ######################
 ## Production image ##
 ######################
-FROM node:22.5.1-bullseye-slim as production
+FROM node:22.18.0-bullseye-slim as production
 
 RUN mkdir -p /home/app/services/server
 
