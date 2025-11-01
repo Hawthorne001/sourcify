@@ -15,7 +15,7 @@ RUN npx lerna run build --scope sourcify-server
 ######################
 ## Production image ##
 ######################
-FROM node:22.5.1-bookworm-slim as production
+FROM node:22.21.1-bookworm-slim as production
 
 RUN mkdir -p /home/app/services/server
 
